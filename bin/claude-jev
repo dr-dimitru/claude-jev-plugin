@@ -36,8 +36,8 @@ function parseArgs(rawArgs) {
       endpoint = rawArgs[++i];
     } else if (arg.startsWith("--endpoint=")) {
       endpoint = arg.slice("--endpoint=".length);
-    } else if (arg.startsWith("-")) {
-      // ignore unknown flag
+    } else if (arg.startsWith("-") && positionals[0]?.toLowerCase() !== "check") {
+      // Ignore unknown flags for non-check commands.
     } else {
       positionals.push(arg);
     }

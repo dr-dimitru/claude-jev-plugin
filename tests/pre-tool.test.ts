@@ -10,9 +10,36 @@ import {
 } from "../src/hooks/pre-tool.ts";
 import { runUserPrompt } from "../src/hooks/user-prompt.ts";
 import { sessionStore } from "../src/hook-io.ts";
-import type { JevResponse } from "../src/client.ts";
+import {
+  DEFAULT_RETRIES,
+  DEFAULT_TIMEOUT_MS,
+  type JevResponse,
+} from "../src/client.ts";
 
 describe("PreToolUse and UserPromptSubmit hooks", () => {
+  test("hook timeout covers the default client retry budget", () => {
+    const hooks = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dirname, "../hooks/hooks.json"), "utf8"),
+    ) as { hooks: Record<string, Array<{ hooks: Array<{ timeout?: number }> }>> };
+    const minimumSeconds = Math.ceil(DEFAULT_TIMEOUT_MS / 1000) * (DEFAULT_RETRIES + 1);
+    for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) {
+      const timeout = hooks.hooks[event]?.[0]?.hooks[0]?.timeout ?? 0;
+      assert.ok(
+        timeout >= minimumSeconds,
+        `${event} timeout ${timeout}s must cover ${minimumSeconds}s client budget`,
+      );
+    }
+  });
+
+  test("missing required hook fields fail open without a decision", async () => {
+    const result = await runPreTool({
+      session_id: "missing-hook-fields",
+      tool_name: "Bash",
+      tool_input: { command: "echo safe" },
+    });
+    assert.equal(result, null);
+  });
+
   test("recognizes documented non-interactive permission modes", () => {
     assert.equal(isPromptHostAvailable({ permission_mode: "dontAsk" }), false);
     assert.equal(

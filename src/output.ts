@@ -161,7 +161,11 @@ export function normalizeToolOutput(payload: RawOutputPayload): NormalizedOutput
   let output = "";
   let toolResponse: unknown = undefined;
 
-  if ("tool_response" in payload && payload.tool_response !== undefined) {
+  if (
+    "tool_response" in payload &&
+    payload.tool_response !== undefined &&
+    !(isError && payload.error !== undefined)
+  ) {
     toolResponse = payload.tool_response;
     if (typeof payload.tool_response === "string") {
       output = payload.tool_response;

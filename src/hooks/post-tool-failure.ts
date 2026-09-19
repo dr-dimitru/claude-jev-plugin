@@ -122,16 +122,14 @@ export async function runPostToolFailure(
   }
 
   const sessionId = typeof payload.session_id === "string" ? payload.session_id : undefined;
-  const cwd = typeof payload.cwd === "string" ? payload.cwd : process.cwd();
+  const cwd = typeof payload.cwd === "string" ? payload.cwd : undefined;
+  const eventName = typeof payload.hook_event_name === "string" ? payload.hook_event_name : undefined;
   const agentId = typeof payload.agent_id === "string" ? payload.agent_id : undefined;
   const scratchpadDir =
     typeof payload.scratchpad_dir === "string" ? payload.scratchpad_dir : undefined;
 
-  if (!sessionId) {
-    return await emitRateLimitedDiagnostic(
-      "claude-jev: missing required session_id in payload",
-      null
-    );
+  if (!sessionId || !cwd || eventName !== "PostToolUseFailure") {
+    return null;
   }
 
   const store = sessionStore({
@@ -205,6 +203,11 @@ export async function runPostToolFailure(
           tool_input: normalized.toolInput,
           output: normalized.output,
           is_error: normalized.isError,
+          config: {
+            argumentChars: config.gate?.argumentChars ?? 400,
+            output: { outputChars: config.output.outputChars },
+            maxStateChars: config.maxStateChars ?? 8000,
+          },
         });
 
         const response = await askFn({

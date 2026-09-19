@@ -111,6 +111,17 @@ describe("Output Normalization", () => {
     assert.equal(norm.output, "just plain text result");
   });
 
+  it("prefers top-level failure error when tool_response is null", () => {
+    const norm = normalizeToolOutput({
+      hook_event_name: "PostToolUseFailure",
+      tool_name: "Bash",
+      tool_response: null,
+      error: "Exit code 1\nactual failure text",
+    });
+    assert.equal(norm.isError, true);
+    assert.equal(norm.output, "Exit code 1\nactual failure text");
+  });
+
   it("normalizes failed PostToolUseFailure payload with top-level error", () => {
     const payload: PostToolUseFailurePayload = {
       session_id: "sess-fail-1",

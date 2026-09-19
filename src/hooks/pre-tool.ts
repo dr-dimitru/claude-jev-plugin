@@ -142,12 +142,13 @@ export async function runPreTool(
   }
 
   const sessionId = typeof payload.session_id === "string" ? payload.session_id : undefined;
-  const cwd = typeof payload.cwd === "string" ? payload.cwd : process.cwd();
+  const cwd = typeof payload.cwd === "string" ? payload.cwd : undefined;
+  const eventName = typeof payload.hook_event_name === "string" ? payload.hook_event_name : undefined;
   const agentId = typeof payload.agent_id === "string" ? payload.agent_id : undefined;
   const scratchpadDir = typeof payload.scratchpad_dir === "string" ? payload.scratchpad_dir : undefined;
 
-  if (!sessionId) {
-    return await emitRateLimitedDiagnostic("claude-jev: missing required session_id in payload", null);
+  if (!sessionId || !cwd || eventName !== "PreToolUse") {
+    return null;
   }
 
   const store = sessionStore({

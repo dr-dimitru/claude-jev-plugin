@@ -79,6 +79,57 @@ describe("PostToolUseFailure Hook", () => {
     assert.strictEqual((result as any).updatedToolOutput, undefined);
   });
 
+  it("passes outputChars and maxStateChars into failed output state", async () => {
+    let capturedState: any;
+    const result = await runPostToolFailure(
+      {
+        session_id: "sess-failure-bounds",
+        cwd: tmpDir,
+        scratchpad_dir: tmpDir,
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error: "0123456789ABCDEFGHIJ",
+      },
+      {
+        askJevFn: async (call: any) => {
+          capturedState = call.state;
+          return {
+            answers: {
+              leaks_secret: { type: "noul" as const, noul: 0.01 },
+              failure_class: {
+                type: "choice" as const,
+                choice: "no_failure",
+                probabilities: { no_failure: 1 },
+                confidence: 1,
+              },
+            },
+          };
+        },
+        config: {
+          model: "jev-latest",
+          apiKey: "test-api-key",
+          maxStateChars: 8000,
+          gate: { argumentChars: 400 },
+          timeoutMs: 20000,
+          retries: 2,
+          output: {
+            enabled: true,
+            tools: ["Bash"],
+            outputChars: 10,
+            leakThreshold: 0.9,
+            minConfidence: 0.6,
+          },
+        } as any,
+      },
+    );
+
+    assert.equal(result, null);
+    assert.ok(capturedState);
+    assert.ok(capturedState.output.startsWith("0123456789"));
+    assert.match(capturedState.output, /chars elided/);
+  });
+
   it("leak on failure: warns user and adds context without claiming output replacement", async () => {
     const rawSecret = "super-secret-password-xyz123";
     const askJevFn = async () => ({
@@ -396,6 +447,7 @@ describe("PostToolUseFailure Hook", () => {
       {
         session_id: "sess-dis",
         cwd: tmpDir,
+        hook_event_name: "PostToolUseFailure",
         tool_name: "Bash",
         error: "err",
       },
@@ -412,6 +464,7 @@ describe("PostToolUseFailure Hook", () => {
       {
         session_id: "sess-dis",
         cwd: tmpDir,
+        hook_event_name: "PostToolUseFailure",
         tool_name: "Write",
         error: "err",
       },
@@ -429,6 +482,7 @@ describe("PostToolUseFailure Hook", () => {
         session_id: "sess-nokey",
         cwd: tmpDir,
         scratchpad_dir: tmpDir,
+        hook_event_name: "PostToolUseFailure",
         tool_name: "Bash",
         error: "err",
       },

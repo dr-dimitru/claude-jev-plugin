@@ -77,6 +77,24 @@ describe("Cache and Coordination", () => {
     assert.equal(callCount, 2);
   });
 
+  test("scopes scratchpad cache entries by session", async () => {
+    let callCount = 0;
+    const producer = async () => ({ value: ++callCount });
+
+    const first = await getOrCreateCached("same-key", 5000, producer, {
+      scratchpadDir: tempDir,
+      sessionId: "session-one",
+    });
+    const second = await getOrCreateCached("same-key", 5000, producer, {
+      scratchpadDir: tempDir,
+      sessionId: "session-two",
+    });
+
+    assert.deepEqual(first, { value: 1 });
+    assert.deepEqual(second, { value: 2 });
+    assert.equal(callCount, 2);
+  });
+
   test("re-runs producer after TTL expires", async () => {
     let callCount = 0;
     const producer = async () => {

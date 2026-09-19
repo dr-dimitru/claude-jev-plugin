@@ -89,19 +89,23 @@ function toSafeKey(key: unknown): string {
 }
 
 function resolveCacheDir(options?: CacheOptions): string {
+  const sessionIdentity = options?.agentId
+    ? `${options.sessionId ?? "default"}:${options.agentId}`
+    : options?.sessionId ?? "default";
+  const sessionPart = crypto
+    .createHash("sha256")
+    .update(sessionIdentity, "utf-8")
+    .digest("hex");
+
   if (options?.cacheDir && options.cacheDir.trim().length > 0) {
     return path.resolve(options.cacheDir.trim());
   }
 
   if (options?.scratchpadDir && options.scratchpadDir.trim().length > 0) {
-    return path.join(path.resolve(options.scratchpadDir.trim()), "cache");
+    return path.join(path.resolve(options.scratchpadDir.trim()), "cache", sessionPart);
   }
 
   const userHome = options?.homeDir ?? process.env.HOME ?? os.homedir();
-  const sessionPart = options?.sessionId
-    ? crypto.createHash("sha256").update(options.sessionId, "utf-8").digest("hex")
-    : "default";
-
   return path.join(userHome, ".cache", "claude-jev", "cache", sessionPart);
 }
 

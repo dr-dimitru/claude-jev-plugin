@@ -5,6 +5,9 @@
   "type": "module",
   "main": "dist/client.js",
   "types": "dist/client.d.ts",
+  "bin": {
+    "claude-jev": "bin/claude-jev"
+  },
   "scripts": {
     "build": "tsc",
     "test": "node --experimental-strip-types --test"

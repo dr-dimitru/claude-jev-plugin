@@ -17,7 +17,7 @@ Status: Phase 1 research and design. Runtime code is not implemented yet.
 | Pi session memory | Session-keyed local files | Share cache and last-verdict state across short-lived hook processes. |
 | `jev_ask` | Namespaced skill and local CLI | Keep explicit judgments outside the automatic hook path. No MCP replacement is used. |
 
-A `UserPromptSubmit` hook is needed because `PreToolUse` does not include the current user prompt. It stores only the latest bounded prompt. A transcript read is a fallback only when no prompt state exists. Claude documents that the transcript can lag the in-memory conversation, so it is not the primary source.
+A `UserPromptSubmit` hook is needed because `PreToolUse` does not include the current user prompt. It stores only the latest bounded prompt. The plugin does not fall back to reading `transcript_path`: Claude documents that the transcript can lag the in-memory conversation, and avoiding that read keeps prompt data out of the hook path when prompt capture is unavailable.
 
 ## Claude Code hook contracts
 
@@ -48,7 +48,7 @@ A plugin places only its manifest in `.claude-plugin/plugin.json`. Hook configur
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/dist/hooks/pre-tool.js"],
-            "timeout": 25
+            "timeout": 65
           }
         ]
       }

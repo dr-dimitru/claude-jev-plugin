@@ -73,6 +73,59 @@ describe("PostToolUse Hook", () => {
     assert.strictEqual(result, null);
   });
 
+  it("passes outputChars and maxStateChars into successful output state", async () => {
+    let capturedState: any;
+    const askJevFn = async (call: any) => {
+      capturedState = call.state;
+      return {
+        answers: {
+          leaks_secret: { type: "noul" as const, noul: 0.01 },
+          failure_class: {
+            type: "choice" as const,
+            choice: "no_failure",
+            probabilities: { no_failure: 1 },
+            confidence: 1,
+          },
+        },
+      };
+    };
+
+    const result = await runPostTool(
+      {
+        session_id: "sess-output-bounds",
+        cwd: tmpDir,
+        scratchpad_dir: tmpDir,
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        tool_response: { stdout: "0123456789ABCDEFGHIJ" },
+      },
+      {
+        askJevFn: askJevFn as any,
+        config: {
+          model: "jev-latest",
+          apiKey: "test-api-key",
+          maxStateChars: 8000,
+          gate: { argumentChars: 400 },
+          timeoutMs: 20000,
+          retries: 2,
+          output: {
+            enabled: true,
+            tools: ["Bash"],
+            outputChars: 10,
+            leakThreshold: 0.9,
+            minConfidence: 0.6,
+          },
+        } as any,
+      },
+    );
+
+    assert.equal(result, null);
+    assert.ok(capturedState);
+    assert.ok(capturedState.output.startsWith("0123456789"));
+    assert.match(capturedState.output, /chars elided/);
+  });
+
   it("deterministic advice: high confidence failure advice returned in additionalContext", async () => {
     let jevCalled = false;
     const askJevFn = async () => {
@@ -467,6 +520,7 @@ describe("PostToolUse Hook", () => {
       {
         session_id: "sess-dis",
         cwd: tmpDir,
+        hook_event_name: "PostToolUse",
         tool_name: "Bash",
         tool_response: { stdout: "ok" },
       },
@@ -483,6 +537,7 @@ describe("PostToolUse Hook", () => {
       {
         session_id: "sess-dis",
         cwd: tmpDir,
+        hook_event_name: "PostToolUse",
         tool_name: "Write",
         tool_response: { stdout: "ok" },
       },
@@ -500,6 +555,7 @@ describe("PostToolUse Hook", () => {
         session_id: "sess-nokey",
         cwd: tmpDir,
         scratchpad_dir: tmpDir,
+        hook_event_name: "PostToolUse",
         tool_name: "Bash",
         tool_response: { stdout: "ok" },
       },
