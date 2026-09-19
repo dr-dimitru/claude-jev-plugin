@@ -1,0 +1,14 @@
+{
+  "name": "claude-jev",
+  "version": "0.1.0",
+  "description": "Semantic guardrails and output verification for Claude Code powered by TypeSafe Jev",
+  "type": "module",
+  "main": "dist/client.js",
+  "types": "dist/client.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "node -e 'const args = process.argv.slice(1).filter(a => a !== \"--runInBand\"); const { spawnSync } = require(\"child_process\"); const res = spawnSync(process.execPath, [\"--experimental-strip-types\", \"--test\", ...(args.length ? args : [\"tests/client.test.ts\"])], { stdio: \"inherit\" }); process.exit(res.status ?? 0);' --"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
