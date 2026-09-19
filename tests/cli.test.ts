@@ -429,6 +429,8 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         assert.ok(reqBody.questions.impact, "Questions must include impact");
         assert.strictEqual(reqBody.questions.destructive.type, "noul");
         assert.strictEqual(reqBody.questions.impact.type, "score");
+        assert.match(reqBody.state.tool_input.command, /-rf/);
+        assert.match(reqBody.state.tool_input.command, /--force/);
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
