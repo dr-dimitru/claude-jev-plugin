@@ -1,0 +1,296 @@
+#!/usr/bin/env node
+
+import * as path from "node:path";
+import { askJev, redact, boundText } from "../dist/client.js";
+import { loadConfig } from "../dist/config.js";
+import { buildGateState } from "../dist/state.js";
+import { sessionStore } from "../dist/hook-io.js";
+import { GATE_QUESTIONS, evaluateGate } from "../dist/gate.js";
+
+function parseArgs(rawArgs) {
+  const positionals = [];
+  let sessionId;
+  let scratchpadDir;
+  let cwd;
+  let endpoint;
+  let help = false;
+
+  for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i];
+
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+    } else if (arg === "--session-id" && i + 1 < rawArgs.length) {
+      sessionId = rawArgs[++i];
+    } else if (arg.startsWith("--session-id=")) {
+      sessionId = arg.slice("--session-id=".length);
+    } else if (arg === "--scratchpad-dir" && i + 1 < rawArgs.length) {
+      scratchpadDir = rawArgs[++i];
+    } else if (arg.startsWith("--scratchpad-dir=")) {
+      scratchpadDir = arg.slice("--scratchpad-dir=".length);
+    } else if (arg === "--cwd" && i + 1 < rawArgs.length) {
+      cwd = rawArgs[++i];
+    } else if (arg.startsWith("--cwd=")) {
+      cwd = arg.slice("--cwd=".length);
+    } else if (arg === "--endpoint" && i + 1 < rawArgs.length) {
+      endpoint = rawArgs[++i];
+    } else if (arg.startsWith("--endpoint=")) {
+      endpoint = arg.slice("--endpoint=".length);
+    } else if (arg.startsWith("-")) {
+      // ignore unknown flag
+    } else {
+      positionals.push(arg);
+    }
+  }
+
+  const command = positionals[0]?.toLowerCase() || "status";
+  return {
+    command,
+    positionals,
+    sessionId,
+    scratchpadDir,
+    cwd,
+    endpoint,
+    help,
+  };
+}
+
+function printHelp() {
+  console.log(`claude-jev - Semantic guardrails and output verification for Claude Code
+
+Usage:
+  claude-jev status [--session-id <id>]
+  claude-jev enable --session-id <id>
+  claude-jev disable --session-id <id>
+  claude-jev mode <shadow|enforce> --session-id <id>
+  claude-jev last --session-id <id>
+  claude-jev output --session-id <id>
+  claude-jev check <text>
+
+Options:
+  --session-id <id>        Exact session ID for session state and toggles
+  --scratchpad-dir <dir>   Custom scratchpad/cache directory for session state
+  --cwd <dir>              Working directory (defaults to current working directory)
+  --endpoint <url>         Custom TypeSafe API endpoint
+  -h, --help               Show this help message
+`);
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.help) {
+    printHelp();
+    return;
+  }
+
+  const cwd = args.cwd ? path.resolve(args.cwd) : process.cwd();
+
+  switch (args.command) {
+    case "status": {
+      const config = loadConfig(cwd);
+
+      let sessionInfo = "Session state: unknown (specify --session-id for exact session state)";
+      if (args.sessionId) {
+        const store = sessionStore({
+          sessionId: args.sessionId,
+          scratchpadDir: args.scratchpadDir,
+        });
+        const overrides = await store.getOverrides();
+        const lastGate = await store.getLastVerdict("gate");
+        const lastOutput = await store.getLastVerdict("output");
+
+        const effectiveEnabled = overrides.enabled !== undefined ? overrides.enabled : config.gate.enabled;
+        const effectiveMode = overrides.mode !== undefined ? overrides.mode : config.gate.mode;
+
+        sessionInfo = [
+          `Session ID: ${args.sessionId}`,
+          `  Effective gate: ${effectiveEnabled ? "enabled" : "disabled"}`,
+          `  Effective mode: ${effectiveMode}`,
+          `  Session overrides: enabled=${overrides.enabled !== undefined ? overrides.enabled : "none"}, mode=${overrides.mode ?? "none"}`,
+          `  Last gate verdict: ${lastGate ? (lastGate.flagged ? "flagged" : "clear") : "none"}`,
+          `  Last output verdict: ${lastOutput ? (lastOutput.flagged ? "flagged" : "clear") : "none"}`,
+        ].join("\n");
+      }
+
+      console.log(`claude-jev status:
+Config:
+  Model: ${config.model}
+  Gate: ${config.gate.enabled ? "enabled" : "disabled"} (mode: ${config.gate.mode})
+  Gate tools: ${config.gate.tools.join(", ")}
+  Output: ${config.output.enabled ? "enabled" : "disabled"} (tools: ${config.output.tools.join(", ")})
+  API key: ${config.apiKey ? "configured" : "not configured"}
+Session:
+  ${sessionInfo}`);
+      break;
+    }
+
+    case "enable": {
+      if (!args.sessionId) {
+        console.error("Exact session state is unavailable: --session-id is required for session toggles.");
+        process.exit(1);
+      }
+      const store = sessionStore({
+        sessionId: args.sessionId,
+        scratchpadDir: args.scratchpadDir,
+      });
+      await store.setOverrides({ enabled: true });
+      console.log(`claude-jev: session ${args.sessionId} gate enabled.`);
+      break;
+    }
+
+    case "disable": {
+      if (!args.sessionId) {
+        console.error("Exact session state is unavailable: --session-id is required for session toggles.");
+        process.exit(1);
+      }
+      const store = sessionStore({
+        sessionId: args.sessionId,
+        scratchpadDir: args.scratchpadDir,
+      });
+      await store.setOverrides({ enabled: false });
+      console.log(`claude-jev: session ${args.sessionId} gate disabled.`);
+      break;
+    }
+
+    case "mode": {
+      const targetMode = args.positionals[1]?.toLowerCase();
+      if (targetMode !== "shadow" && targetMode !== "enforce") {
+        console.error("Invalid mode: expected 'shadow' or 'enforce'. Usage: claude-jev mode <shadow|enforce> --session-id <id>");
+        process.exit(1);
+      }
+      if (!args.sessionId) {
+        console.error("Exact session state is unavailable: --session-id is required for session toggles.");
+        process.exit(1);
+      }
+      const store = sessionStore({
+        sessionId: args.sessionId,
+        scratchpadDir: args.scratchpadDir,
+      });
+      await store.setOverrides({ mode: targetMode });
+      console.log(`claude-jev: session ${args.sessionId} mode set to ${targetMode}.`);
+      break;
+    }
+
+    case "last": {
+      if (!args.sessionId) {
+        console.error("Exact session state is unavailable: --session-id is required to view last verdict.");
+        process.exit(1);
+      }
+      const store = sessionStore({
+        sessionId: args.sessionId,
+        scratchpadDir: args.scratchpadDir,
+      });
+      const verdict = await store.getLastVerdict("gate");
+      if (!verdict) {
+        console.log(`No gate verdict recorded for session ${args.sessionId}.`);
+        break;
+      }
+      console.log(`Last gate verdict for session ${args.sessionId}:`);
+      console.log(`  Flagged: ${verdict.flagged ? "YES" : "NO"}`);
+      if (Array.isArray(verdict.reasons) && verdict.reasons.length > 0) {
+        console.log(`  Reasons: ${verdict.reasons.join(", ")}`);
+      }
+      if (verdict.scores && typeof verdict.scores === "object") {
+        const d = verdict.scores.destructive?.toFixed(2) ?? "n/a";
+        const e = verdict.scores.exfiltration?.toFixed(2) ?? "n/a";
+        const b = (verdict.scores.beyond_scope ?? verdict.scores.beyondScope)?.toFixed(2) ?? "n/a";
+        const i = verdict.scores.impact?.toFixed(2) ?? "n/a";
+        const c = verdict.scores.impactConfidence?.toFixed(2) ?? "n/a";
+        console.log(`  Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`);
+      }
+      break;
+    }
+
+    case "output": {
+      if (!args.sessionId) {
+        console.error("Exact session state is unavailable: --session-id is required to view last output verdict.");
+        process.exit(1);
+      }
+      const store = sessionStore({
+        sessionId: args.sessionId,
+        scratchpadDir: args.scratchpadDir,
+      });
+      const verdict = await store.getLastVerdict("output");
+      if (!verdict) {
+        console.log(`No output verdict recorded for session ${args.sessionId}.`);
+        break;
+      }
+      console.log(`Last output verdict for session ${args.sessionId}:`);
+      console.log(`  Flagged: ${verdict.flagged ? "YES" : "NO"}`);
+      console.log(`  Leaks secret: ${verdict.leaksSecret ? "YES" : "NO"}${verdict.leakScore !== undefined ? ` (score: ${verdict.leakScore})` : ""}`);
+      console.log(`  Failure class: ${verdict.failureClass ?? "none"}${verdict.failureConfidence !== undefined ? ` (conf: ${verdict.failureConfidence})` : ""}`);
+      if (verdict.advice) {
+        console.log(`  Advice: ${verdict.advice}`);
+      }
+      break;
+    }
+
+    case "check": {
+      const text = args.positionals.slice(1).join(" ").trim();
+      if (!text) {
+        console.error("Usage: claude-jev check <text>");
+        process.exit(1);
+      }
+
+      const config = loadConfig(cwd);
+      if (!config.apiKey) {
+        console.error("Error: Missing TypeSafe API key. Set TYPESAFE_API_KEY environment variable.");
+        process.exit(1);
+      }
+
+      const boundedInput = boundText(text, config.gate.argumentChars);
+      const boundedRequest = boundText(text, 1200);
+
+      const state = buildGateState({
+        tool: "Bash",
+        tool_input: { command: boundedInput },
+        cwd,
+        user_request: boundedRequest,
+        config,
+      });
+
+      try {
+        const response = await askJev({
+          model: config.model,
+          state,
+          questions: GATE_QUESTIONS,
+          apiKey: config.apiKey,
+          endpoint: args.endpoint ?? config.endpoint,
+          timeoutMs: config.timeoutMs,
+          retries: config.retries,
+        });
+
+        const verdict = evaluateGate(response, config);
+        console.log(`Manual check:`);
+        console.log(`  Flagged: ${verdict.flagged ? "YES" : "NO"}`);
+        if (verdict.reasons.length > 0) {
+          console.log(`  Reasons: ${verdict.reasons.join(", ")}`);
+        }
+        const d = verdict.scores.destructive?.toFixed(2) ?? "n/a";
+        const e = verdict.scores.exfiltration?.toFixed(2) ?? "n/a";
+        const b = (verdict.scores.beyond_scope ?? verdict.scores.beyondScope)?.toFixed(2) ?? "n/a";
+        const i = verdict.scores.impact?.toFixed(2) ?? "n/a";
+        const c = verdict.scores.impactConfidence?.toFixed(2) ?? "n/a";
+        console.log(`  Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`);
+      } catch (err) {
+        const rawMsg = err?.message || String(err);
+        const safeMsg = redact(rawMsg);
+        console.error(`Error: ${safeMsg}`);
+        process.exit(1);
+      }
+      break;
+    }
+
+    default: {
+      console.error(`Unknown command: '${args.command}'. Run 'claude-jev --help' for available commands.`);
+      process.exit(1);
+    }
+  }
+}
+
+main().catch((err) => {
+  const safeMsg = redact(err?.message || String(err));
+  console.error(`Fatal error: ${safeMsg}`);
+  process.exit(1);
+});
