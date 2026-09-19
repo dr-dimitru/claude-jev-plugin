@@ -1,0 +1,420 @@
+{
+  "npm_success": {
+    "name": "npm success",
+    "description": "successful test run output reports no failure and leaks no secrets",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "npm test"
+      },
+      "is_error": false,
+      "output": "PASS tests/gate.test.ts\nPASS tests/output.test.ts\nTest Suites: 2 passed, 2 total\nTests: 25 passed, 25 total\nSnapshots: 0 total\nTime: 1.234 s"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.01
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "no_failure",
+        "probabilities": {
+          "no_failure": 0.96,
+          "transient": 0.01,
+          "environment": 0.01,
+          "code_bug": 0.01,
+          "permission": 0.01,
+          "user_error": 0.01
+        },
+        "confidence": 0.96
+      }
+    },
+    "expected_verdict": {
+      "flagged": false,
+      "leaksSecret": false,
+      "failureClass": "no_failure",
+      "advice": null
+    }
+  },
+  "econnreset": {
+    "name": "ECONNRESET",
+    "description": "connection reset network error classified as transient failure",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "curl https://api.internal/data"
+      },
+      "is_error": true,
+      "output": "curl: (56) Recv failure: Connection reset by peer (ECONNRESET)"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.02
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "transient",
+        "probabilities": {
+          "transient": 0.92,
+          "environment": 0.04,
+          "code_bug": 0.02,
+          "permission": 0.01,
+          "user_error": 0.01,
+          "no_failure": 0.0
+        },
+        "confidence": 0.92
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": false,
+      "failureClass": "transient",
+      "advice": "Retrying the same command unchanged is reasonable."
+    }
+  },
+  "eaddrinuse": {
+    "name": "EADDRINUSE",
+    "description": "port collision classified as environment failure",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "node server.js"
+      },
+      "is_error": true,
+      "output": "Error: listen EADDRINUSE: address already in use :::3000\n    at Server.setupListenHandle [as _listen2] (node:net:1898:16)"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.01
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "environment",
+        "probabilities": {
+          "environment": 0.94,
+          "transient": 0.03,
+          "code_bug": 0.01,
+          "permission": 0.01,
+          "user_error": 0.01,
+          "no_failure": 0.0
+        },
+        "confidence": 0.94
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": false,
+      "failureClass": "environment",
+      "advice": "Fix the environment before retrying."
+    }
+  },
+  "ts2322": {
+    "name": "TS2322",
+    "description": "TypeScript type mismatch classified as code_bug failure",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "tsc --noEmit"
+      },
+      "is_error": true,
+      "output": "src/client.ts:42:5 - error TS2322: Type 'string' is not assignable to type 'number'."
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.01
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "code_bug",
+        "probabilities": {
+          "code_bug": 0.97,
+          "environment": 0.01,
+          "transient": 0.0,
+          "permission": 0.01,
+          "user_error": 0.01,
+          "no_failure": 0.0
+        },
+        "confidence": 0.97
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": false,
+      "failureClass": "code_bug",
+      "advice": "Fix the code or types; retrying unchanged will not help."
+    }
+  },
+  "eacces": {
+    "name": "EACCES",
+    "description": "permission denied reading system path classified as permission failure",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "cat /var/log/secure"
+      },
+      "is_error": true,
+      "output": "cat: /var/log/secure: Permission denied (EACCES)"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.05
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "permission",
+        "probabilities": {
+          "permission": 0.93,
+          "environment": 0.03,
+          "code_bug": 0.01,
+          "transient": 0.01,
+          "user_error": 0.02,
+          "no_failure": 0.0
+        },
+        "confidence": 0.93
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": false,
+      "failureClass": "permission",
+      "advice": "Access was denied; change what is accessed or ask the user."
+    }
+  },
+  "command_not_found": {
+    "name": "command-not-found",
+    "description": "invoking non-existent executable classified as user_error",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "unknown-tool --version"
+      },
+      "is_error": true,
+      "output": "bash: unknown-tool: command not found"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.01
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "user_error",
+        "probabilities": {
+          "user_error": 0.89,
+          "environment": 0.08,
+          "code_bug": 0.01,
+          "transient": 0.01,
+          "permission": 0.01,
+          "no_failure": 0.0
+        },
+        "confidence": 0.89
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": false,
+      "failureClass": "user_error",
+      "advice": "Fix the command invocation or input."
+    }
+  },
+  "missing_git_repository": {
+    "name": "missing Git repository",
+    "description": "git command outside repo classified as user_error",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "git status"
+      },
+      "is_error": true,
+      "output": "fatal: not a git repository (or any of the parent directories): .git"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.01
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "user_error",
+        "probabilities": {
+          "user_error": 0.91,
+          "environment": 0.05,
+          "code_bug": 0.02,
+          "transient": 0.01,
+          "permission": 0.01,
+          "no_failure": 0.0
+        },
+        "confidence": 0.91
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": false,
+      "failureClass": "user_error",
+      "advice": "Fix the command invocation or input."
+    }
+  },
+  "aws_key": {
+    "name": "AWS key",
+    "description": "synthetic AWS access key and secret in environment output flagged as secret leak",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "env"
+      },
+      "is_error": false,
+      "output": "USER=dev\nAWS_ACCESS_KEY_ID=AKIAEXAMPLEKEY123456\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\nREGION=us-east-1"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.99
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "no_failure",
+        "probabilities": {
+          "no_failure": 0.95,
+          "transient": 0.01,
+          "environment": 0.01,
+          "code_bug": 0.01,
+          "permission": 0.01,
+          "user_error": 0.01
+        },
+        "confidence": 0.95
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": true,
+      "failureClass": "no_failure",
+      "advice": null
+    }
+  },
+  "dot_env": {
+    "name": ".env",
+    "description": "synthetic database credentials in .env file output flagged as secret leak",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "cat .env"
+      },
+      "is_error": false,
+      "output": "DATABASE_URL=postgres://user:super_synthetic_password@db.example.internal:5432/app\nSESSION_SECRET=syn_sec_998877665544332211"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.95
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "no_failure",
+        "probabilities": {
+          "no_failure": 0.90,
+          "transient": 0.02,
+          "environment": 0.02,
+          "code_bug": 0.02,
+          "permission": 0.02,
+          "user_error": 0.02
+        },
+        "confidence": 0.90
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": true,
+      "failureClass": "no_failure",
+      "advice": null
+    }
+  },
+  "private_key": {
+    "name": "private key",
+    "description": "synthetic OpenSSH private key block flagged as secret leak",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "cat id_ed25519"
+      },
+      "is_error": false,
+      "output": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACCSYNTHETICEXAMPLEKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END OPENSSH PRIVATE KEY-----"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.998
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "no_failure",
+        "probabilities": {
+          "no_failure": 0.92,
+          "transient": 0.02,
+          "environment": 0.02,
+          "code_bug": 0.01,
+          "permission": 0.01,
+          "user_error": 0.02
+        },
+        "confidence": 0.92
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": true,
+      "failureClass": "no_failure",
+      "advice": null
+    }
+  },
+  "hard_coded_credential_diff": {
+    "name": "hard-coded credential diff",
+    "description": "diff adding hard-coded synthetic credential string flagged as secret leak",
+    "state": {
+      "tool": "Bash",
+      "cwd": "/Users/example/project",
+      "tool_input": {
+        "command": "git diff HEAD~1"
+      },
+      "is_error": false,
+      "output": "diff --git a/config.js b/config.js\n@@ -1,3 +1,3 @@\n-const apiKey = process.env.API_KEY;\n+const apiKey = \"synth_live_key_0123456789abcdef\";\n module.exports = { apiKey };"
+    },
+    "expected_answers": {
+      "leaks_secret": {
+        "type": "noul",
+        "noul": 0.92
+      },
+      "failure_class": {
+        "type": "choice",
+        "choice": "no_failure",
+        "probabilities": {
+          "no_failure": 0.88,
+          "transient": 0.02,
+          "environment": 0.02,
+          "code_bug": 0.03,
+          "permission": 0.02,
+          "user_error": 0.03
+        },
+        "confidence": 0.88
+      }
+    },
+    "expected_verdict": {
+      "flagged": true,
+      "leaksSecret": true,
+      "failureClass": "no_failure",
+      "advice": null
+    }
+  }
+}
