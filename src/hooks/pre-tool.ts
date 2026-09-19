@@ -23,7 +23,7 @@ import { askJev, redact } from "../client.ts";
 
 export interface HookSpecificOutput {
   hookEventName: "PreToolUse";
-  permissionDecision: "ask";
+  permissionDecision: "ask" | "deny";
   permissionDecisionReason: string;
 }
 
@@ -41,6 +41,10 @@ export interface PreToolPayload {
   transcript_path?: string;
   cwd: string;
   permission_mode?: string;
+  prompt_host?: boolean;
+  has_ui?: boolean;
+  has_prompt_host?: boolean;
+  headless?: boolean;
   hook_event_name?: string;
   tool_name?: string;
   tool?: string;
@@ -49,6 +53,30 @@ export interface PreToolPayload {
   scratchpad_dir?: string;
   agent_id?: string;
   [key: string]: unknown;
+}
+
+export function normalizeToolName(raw?: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === "bash") return "Bash";
+  if (lower === "write") return "Write";
+  if (lower === "edit") return "Edit";
+  return trimmed;
+}
+
+export function isPromptHostAvailable(payload: Record<string, unknown>): boolean {
+  if (payload.prompt_host === false) return false;
+  if (payload.has_ui === false) return false;
+  if (payload.has_prompt_host === false) return false;
+  if (payload.headless === true) return false;
+  if (typeof payload.permission_mode === "string") {
+    const mode = payload.permission_mode.trim().toLowerCase();
+    if (mode === "headless" || mode === "dont_ask" || mode === "bypass" || mode === "non_interactive") {
+      return false;
+    }
+  }
+  return true;
 }
 
 const RATE_LIMIT_WINDOW_MS = 60000;
@@ -131,10 +159,15 @@ export async function runPreTool(
       return null; // gate disabled, return no stdout
     }
 
-    // 3. Minimal vertical slice: Bash only
-    const toolName = (payload.tool_name ?? payload.tool) as string | undefined;
-    if (toolName !== "Bash") {
-      return null; // Non-Bash skipped in this vertical slice
+    // 3. Tool name normalization and configured tools check
+    const rawToolName = (payload.tool_name ?? payload.tool) as string | undefined;
+    const toolName = normalizeToolName(rawToolName);
+    const configuredTools = (config.gate.tools ?? ["Bash", "Write", "Edit"]).map(
+      (t) => normalizeToolName(t) ?? t
+    );
+
+    if (!toolName || !configuredTools.includes(toolName)) {
+      return null; // Tool not configured for gating
     }
 
     // 4. Missing API key check
@@ -192,8 +225,28 @@ export async function runPreTool(
     }
 
     const mode = overrides.mode ?? config.gate.mode ?? "shadow";
+    const blockWithoutUI =
+      typeof (overrides as any).blockWithoutUI === "boolean"
+        ? (overrides as any).blockWithoutUI
+        : (config.gate.blockWithoutUI ?? false);
 
     if (mode === "enforce") {
+      const hasHost = isPromptHostAvailable(payload);
+      if (!hasHost) {
+        if (blockWithoutUI) {
+          const reason = `claude-jev flagged ${toolName}: ${verdict.summary}`;
+          return {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason: reason,
+            },
+          };
+        }
+        // Fail open when no prompt host is available
+        return null;
+      }
+
       const reason = `claude-jev flagged ${toolName}: ${verdict.summary}`;
       return {
         hookSpecificOutput: {
