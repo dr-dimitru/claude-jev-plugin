@@ -19,6 +19,7 @@ import {
 } from "../src/output.ts";
 import type { JevResponse, JevCall } from "../src/client.ts";
 import { sessionStore } from "../src/hook-io.ts";
+import { DEFAULT_CONFIG } from "../src/config.ts";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -622,6 +623,49 @@ describe("Batched Jev Invocation and Session Deduplication", () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("passes output limits and transport settings from config into Jev state", async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.apiKey = "test-key";
+    config.output.outputChars = 10;
+    config.retries = 7;
+    config.timeoutMs = 3210;
+
+    let sentCall: JevCall | undefined;
+    const verdict = await judgeOutput(
+      {
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        tool_response: { stdout: "0123456789ABCDEFGHIJ" },
+      },
+      {
+        config,
+        askJevFn: async (call) => {
+          sentCall = call;
+          return {
+            model: "jev-latest",
+            answers: {
+              leaks_secret: { type: "noul", noul: 0.01 },
+              failure_class: {
+                type: "choice",
+                choice: "no_failure",
+                probabilities: { no_failure: 1 },
+                confidence: 1,
+              },
+            },
+          };
+        },
+      },
+    );
+
+    assert.equal(verdict.flagged, false);
+    assert.equal(sentCall?.retries, 7);
+    assert.equal(sentCall?.timeoutMs, 3210);
+    const state = sentCall?.state as Record<string, unknown>;
+    assert.equal(typeof state.output, "string");
+    assert.ok((state.output as string).startsWith("0123456789"));
+    assert.ok((state.output as string).includes("chars elided"));
   });
 
   it("redacts tool_response in verdict when leak is detected in judgeOutput", async () => {

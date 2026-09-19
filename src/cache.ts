@@ -254,18 +254,20 @@ export async function getOrCreateCached<T>(
   const pollIntervalMs = options?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const maxEntries = options?.maxEntries ?? DEFAULT_MAX_CACHE_ENTRIES;
 
-  // 1. Check in-process memory cache first
-  const memEntry = memoryCache.get(safeKey);
+  const cacheDir = resolveCacheDir(options);
+  const memoryKey = `${cacheDir}:${safeKey}`;
+
+  // 1. Check in-process memory cache first, scoped to this session cache directory.
+  const memEntry = memoryCache.get(memoryKey);
   if (memEntry && Date.now() < memEntry.expiresAt) {
     return memEntry.value as T;
   }
 
-  // 2. Check in-flight promise for in-process concurrent deduplication
-  if (inFlightPromises.has(safeKey)) {
-    return (await inFlightPromises.get(safeKey)) as T;
+  // 2. Check in-flight promise for in-process concurrent deduplication.
+  if (inFlightPromises.has(memoryKey)) {
+    return (await inFlightPromises.get(memoryKey)) as T;
   }
 
-  const cacheDir = resolveCacheDir(options);
   ensureDirSync(cacheDir);
 
   const entryPath = path.join(cacheDir, `${safeKey}.json`);
@@ -274,7 +276,7 @@ export async function getOrCreateCached<T>(
   // 3. Check file entry
   const existingEntry = await readEntryFile<T>(entryPath, ttlMs);
   if (existingEntry !== null) {
-    memoryCache.set(safeKey, {
+    memoryCache.set(memoryKey, {
       value: existingEntry,
       expiresAt: Date.now() + ttlMs,
     });
@@ -307,7 +309,7 @@ export async function getOrCreateCached<T>(
           // Double-check: did another process finish and write the file right before we got lock?
           const freshEntry = await readEntryFile<T>(entryPath, ttlMs);
           if (freshEntry !== null) {
-            memoryCache.set(safeKey, {
+            memoryCache.set(memoryKey, {
               value: freshEntry,
               expiresAt: Date.now() + ttlMs,
             });
@@ -326,7 +328,7 @@ export async function getOrCreateCached<T>(
           const result = await producer();
 
           await writeEntryFile(cacheDir, safeKey, result, ttlMs, maxEntries);
-          memoryCache.set(safeKey, {
+          memoryCache.set(memoryKey, {
             value: result,
             expiresAt: Date.now() + ttlMs,
           });
@@ -346,7 +348,7 @@ export async function getOrCreateCached<T>(
       // Lock was held by another process: check if cached entry appeared
       const entryAfterWait = await readEntryFile<T>(entryPath, ttlMs);
       if (entryAfterWait !== null) {
-        memoryCache.set(safeKey, {
+        memoryCache.set(memoryKey, {
           value: entryAfterWait,
           expiresAt: Date.now() + ttlMs,
         });
@@ -377,10 +379,10 @@ export async function getOrCreateCached<T>(
     }
   })();
 
-  inFlightPromises.set(safeKey, promise);
+  inFlightPromises.set(memoryKey, promise);
   try {
     return await promise;
   } finally {
-    inFlightPromises.delete(safeKey);
+    inFlightPromises.delete(memoryKey);
   }
 }

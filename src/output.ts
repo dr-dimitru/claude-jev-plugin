@@ -401,6 +401,9 @@ export async function judgeOutput(
     }
   }
 
+  const askFn = options?.askJevFn ?? askJev;
+  const config = options?.config as LoadedConfig | undefined;
+
   // Build bounded output state via src/state.ts
   const boundedState = buildOutputState({
     tool: normalized.tool,
@@ -408,10 +411,14 @@ export async function judgeOutput(
     tool_input: normalized.toolInput,
     output: normalized.output,
     is_error: normalized.isError,
+    config: config
+      ? {
+          argumentChars: config.gate.argumentChars,
+          output: { outputChars: config.output.outputChars },
+          maxStateChars: config.maxStateChars,
+        }
+      : undefined,
   });
-
-  const askFn = options?.askJevFn ?? askJev;
-  const config = options?.config as LoadedConfig | undefined;
 
   const response = await askFn({
     model: config?.model ?? DEFAULT_MODEL,
@@ -420,6 +427,7 @@ export async function judgeOutput(
     apiKey: config?.apiKey,
     endpoint: config?.endpoint,
     timeoutMs: config?.timeoutMs,
+    retries: config?.retries,
     signal: options?.signal,
   });
 

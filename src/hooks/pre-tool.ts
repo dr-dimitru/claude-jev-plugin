@@ -72,7 +72,14 @@ export function isPromptHostAvailable(payload: Record<string, unknown>): boolean
   if (payload.headless === true) return false;
   if (typeof payload.permission_mode === "string") {
     const mode = payload.permission_mode.trim().toLowerCase();
-    if (mode === "headless" || mode === "dont_ask" || mode === "bypass" || mode === "non_interactive") {
+    if (
+      mode === "headless" ||
+      mode === "dont_ask" ||
+      mode === "dontask" ||
+      mode === "bypass" ||
+      mode === "bypasspermissions" ||
+      mode === "non_interactive"
+    ) {
       return false;
     }
   }

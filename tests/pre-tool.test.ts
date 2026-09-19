@@ -3,12 +3,25 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { runPreTool, type PreToolOutput } from "../src/hooks/pre-tool.ts";
+import {
+  runPreTool,
+  isPromptHostAvailable,
+  type PreToolOutput,
+} from "../src/hooks/pre-tool.ts";
 import { runUserPrompt } from "../src/hooks/user-prompt.ts";
 import { sessionStore } from "../src/hook-io.ts";
 import type { JevResponse } from "../src/client.ts";
 
 describe("PreToolUse and UserPromptSubmit hooks", () => {
+  test("recognizes documented non-interactive permission modes", () => {
+    assert.equal(isPromptHostAvailable({ permission_mode: "dontAsk" }), false);
+    assert.equal(
+      isPromptHostAvailable({ permission_mode: "bypassPermissions" }),
+      false,
+    );
+    assert.equal(isPromptHostAvailable({ permission_mode: "default" }), true);
+  });
+
   let tempDir: string;
   let originalEnvKey: string | undefined;
 
