@@ -410,7 +410,7 @@ The plugin does not load large dependencies or start a daemon. If measured proce
 
 ## Native UX and Pi limitations
 
-Claude plugin skills are namespaced, so the closest native names are `/claude-jev:status`, `/claude-jev:enable`, `/claude-jev:disable`, `/claude-jev:shadow`, `/claude-jev:enforce`, `/claude-jev:last`, `/claude-jev:output`, and `/claude-jev:check`. A bundled `claude-jev` executable backs these operations and can be invoked directly from a terminal.
+Claude plugin skills are namespaced. This plugin provides one `/claude-jev:jev` skill; its bundled `claude-jev` executable provides the closest native equivalents for `status`, `enable`, `disable`, `mode shadow`, `mode enforce`, `last`, `output`, and `check`. Separate slash commands would require separate skill files and would not solve the documented session-ID limitation.
 
 Claude does not document a session-ID environment variable for a slash-command skill. Hook stdin has `session_id`, but a skill's Bash process does not receive that hook payload. Therefore exact Pi command parity is not possible without requiring `--session-id` or using an explicitly selected project/session state. The CLI will accept `--session-id` for exact state changes and will label session state as unknown when it is omitted. Session toggles never mutate permanent config.
 

@@ -7,7 +7,7 @@
   "types": "dist/client.d.ts",
   "scripts": {
     "build": "tsc",
-    "test": "node -e 'const args = process.argv.slice(1).filter(a => a !== \"--runInBand\"); const { spawnSync } = require(\"child_process\"); const res = spawnSync(process.execPath, [\"--experimental-strip-types\", \"--test\", ...(args.length ? args : [\"tests/client.test.ts\"])], { stdio: \"inherit\" }); process.exit(res.status ?? 0);' --"
+    "test": "node --experimental-strip-types --test"
   },
   "dependencies": {},
   "devDependencies": {}
