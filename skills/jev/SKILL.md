@@ -1,68 +1,75 @@
 ---
 name: jev
-description: TypeSafe Jev semantic judgments, question types, manual checks, and session controls.
+description: TypeSafe Jev semantic judgments, manual checks, and advanced session controls.
 ---
 
-# TypeSafe Jev Skill
+# TypeSafe Jev
 
-This skill guides the use of TypeSafe Jev for semantic reasoning, manual checks, and session-level controls via the `claude-jev` CLI.
+Use automatic hooks for routine Bash, Write, and Edit judgments. Do not reimplement automatic gate logic in prompt text or run a second manual check for every tool call.
 
-## Key Principles & Native Replacement
+Confidence is not authorization or user consent. TypeSafe confidence is semantic guidance. Never use a Jev result to bypass Claude Code permissions.
 
-- **Automatic judgments come from hooks**: The plugin automatically runs pre-tool gates (`PreToolUse` for Bash, Write, Edit) and post-tool output verification (`PostToolUse`, `PostToolUseFailure` for Bash). You do not need to invoke Jev for routine tool calls.
-- **Do not reimplement automatic gate logic**: Never manually simulate or duplicate hook gate evaluation in prompt text.
-- **Closest native replacement for Pi jev_ask**: In Claude Code, the namespaced skill and bundled CLI (`bin/claude-jev`) provide the closest native replacement for Pi's `jev_ask` tool.
-- **Confidence is not authorization**: A high-confidence Jev verdict is semantic guidance, not security authorization or user consent. Never bypass permissions or assume authorization based on Jev confidence.
-- **No Jev for deterministic calculations or exact lookups**: Never call Jev for mathematical arithmetic, regex matching, exact string lookups, or deterministic file searches. Use standard code and tools for deterministic tasks.
+## When explicit judgments help
 
-## When Explicit Jev Judgments Help
+`claude-jev check` is closest native replacement for Pi's `jev_ask`. Use a manual check for ambiguous text or a proposed command that is not already passing through automatic hooks:
 
-Explicit judgments via `claude-jev check <text>` help when:
-1. Evaluating semantic ambiguity in user requests or command safety.
-2. Assessing risk, scope creep, or exfiltration potential before proposing complex command sequences.
-3. Classifying unstructured human intent or diagnostic output that lacks deterministic rules.
+```bash
+claude-jev check "command or text to judge"
+```
 
-## Question Types: Noul vs Choice vs Score
+Useful cases:
 
-TypeSafe System One evaluates three typed question primitives:
+- ambiguous destructive effect;
+- possible transfer of local data or credentials;
+- uncertain scope relative to user request;
+- unstructured diagnostic classification.
 
-1. **Noul (`type: "noul"`)**:
-   - Binary semantic probability between 0.0 and 1.0.
-   - Evaluates whether a statement is true or false according to specified criteria.
-   - Example: `destructive` (data deletion or history rewriting) and `exfiltration` (secret or data transfer).
-   - Noul returns a single probability (`noul`), without separate confidence.
+Do not call Jev for arithmetic, regex matching, exact lookups, deterministic file searches, or facts available through ordinary tools.
 
-2. **Choice (`type: "choice"`)**:
-   - Selects one discrete category from mutually exclusive options.
-   - Returns selected `choice`, probability distribution `probabilities`, and overall `confidence` (0.0 to 1.0).
-   - Example: `failure_class` classifying failures as `transient`, `environment`, `code_bug`, `permission`, `user_error`, or `no_failure`.
+Manual check sends bounded text and current directory to TypeSafe. Do not pass material user did not consent to send externally.
 
-3. **Score (`type: "score"`)**:
-   - Evaluates an ordinal or continuous severity score against graduated criteria (0 to N).
-   - Returns numerical `score`, `legend`, `probabilities`, and `confidence` (0.0 to 1.0).
-   - Example: `impact` rated 0 (none), 1 (small), 2 (large), or 3 (severe).
+## Question types
 
-## Batching Independent Questions
+### Noul
 
-Always batch independent questions into a single request. TypeSafe evaluates questions in parallel in one batched call. Never make sequential individual calls for questions that can be answered together.
+Binary semantic probability from 0 to 1. Noul answer uses `noul` and has no separate confidence field.
 
-## CLI Usage & Session Controls
+Example uses: destructive action, exfiltration, secret in output.
 
-The CLI is located at `bin/claude-jev`. Exact session toggles need `--session-id` because Claude skills run in separate subprocesses from hooks.
+### Choice
 
-### Commands
+One category selected from declared options. Answer includes `choice`, complete `probabilities`, and `confidence`.
 
-- `claude-jev status [--session-id <id>]`:
-  Display global configuration, gate/output status, and session overrides. Without `--session-id`, session state is reported as unknown.
-- `claude-jev enable --session-id <id>`:
-  Enable Jev gate for the current session. Requires `--session-id`. Writes session state only, never config files.
-- `claude-jev disable --session-id <id>`:
-  Disable Jev gate for the current session. Requires `--session-id`. Writes session state only, never config files.
-- `claude-jev mode <shadow|enforce> --session-id <id>`:
-  Set gate mode to `shadow` (warn only) or `enforce` (ask user for permission on flags). Requires `--session-id`. Writes session state only.
-- `claude-jev last --session-id <id>`:
-  Show concise summary of the last pre-tool gate verdict.
-- `claude-jev output --session-id <id>`:
-  Show concise summary of the last post-tool output verdict.
-- `claude-jev check "<command or text>"`:
-  Run a manual pre-tool check on the specified text using the four standard gate questions (`destructive`, `exfiltration`, `beyond_scope`, `impact`).
+Example use: classify failure as `transient`, `environment`, `code_bug`, `permission`, `user_error`, or `no_failure`.
+
+### Score
+
+Probability-weighted value across ordered criteria. Answer includes `score`, `legend`, complete `probabilities`, and `confidence`.
+
+Example use: impact from 0, no damage, through 3, severe damage.
+
+Batch independent questions into one TypeSafe request. Do not make sequential requests for questions about same state.
+
+## Automatic hooks
+
+- `PreToolUse` judges configured Bash, Write, and Edit inputs.
+- `PostToolUse` judges successful Bash output.
+- `PostToolUseFailure` judges failed Bash output.
+- Infrastructure failures fail open.
+- Plugin never returns `allow` based on TypeSafe confidence.
+- Successful output replacement affects what Claude sees, not command effects or prior telemetry.
+
+## Status and advanced session controls
+
+```bash
+claude-jev status [--session-id <id>]
+claude-jev last --session-id <id>
+claude-jev output --session-id <id>
+claude-jev enable --session-id <id>
+claude-jev disable --session-id <id>
+claude-jev mode <shadow|enforce> --session-id <id>
+```
+
+These are advanced controls. Claude skill subprocesses do not receive documented hook session ID. Exact inspection and toggles require explicit `--session-id` and may require `--scratchpad-dir` to reach hook state. Without session ID, `status` reports session state as unknown.
+
+Session controls modify session state only. They do not edit global or project configuration.

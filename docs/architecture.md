@@ -1,6 +1,6 @@
 # claude-jev architecture
 
-Status: Phase 1 research and design. Runtime code is not implemented yet.
+Status: Implemented and reviewed against current Claude Code and TypeSafe documentation.
 
 `claude-jev` ports the decision parts of `@y0usaf/pi-jev` to Claude Code. Claude Code invokes local command hooks. Those hooks send one bounded JSON request directly to TypeSafe Jev over HTTPS. The plugin does not define an MCP server, an MCP tool, or a persistent MCP process.
 
@@ -48,7 +48,7 @@ A plugin places only its manifest in `.claude-plugin/plugin.json`. Hook configur
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/dist/hooks/pre-tool.js"],
-            "timeout": 65
+            "timeout": 20
           }
         ]
       }
@@ -107,7 +107,7 @@ For an enforce flag it returns:
 
 Claude's documented precedence is `deny > defer > ask > allow`. The plugin never returns `allow` as a consequence of Jev confidence. The default enforcement action is `ask`, not a custom prompt and not an automatic approval.
 
-A configurable deny mode may return `permissionDecision: "deny"`, but it is not the default. The `blockWithoutUI` setting controls whether a flagged call is held in environments where a native prompt cannot be serviced. Its default is false, preserving pi-jev's fail-open behavior for headless runs.
+`blockWithoutUI` applies only when Claude reports documented non-interactive permission modes, currently `dontAsk` or `bypassPermissions`. Its default is false, so those modes fail open; true returns `permissionDecision: "deny"`. Claude hook input has no universal prompt-host field. In other modes, enforce returns `ask` and Claude Code owns whether a prompt host can service it.
 
 ### `PostToolUse`
 
@@ -347,9 +347,9 @@ The environment overrides any configured key source. The default configuration i
 }
 ```
 
-The implementation also accepts transport settings needed for operations, such as `endpoint`, `timeoutMs`, and `retries`. The default endpoint remains the documented TypeSafe endpoint. `TYPESAFE_API_KEY` is the supported secret source. An optional `apiKeyFile` can preserve the source implementation's file-based workflow, but plaintext `apiKey` configuration is not required and is not documented as the normal setup.
+Trusted global configuration may set `model`, `endpoint`, `timeoutMs`, `retries`, and `apiKeyFile`. Project configuration cannot set these fields or any API key. Every endpoint must use HTTPS without embedded credentials. `TYPESAFE_API_KEY` is the preferred secret source; plaintext JSON `apiKey` is not accepted. Relative global `apiKeyFile` paths resolve under `~/.claude`.
 
-Session overrides, last verdicts, recent prompt text, cache entries, in-flight lock metadata, and warning timestamps are local state. The preferred root is the hook's `scratchpad_dir`; otherwise the plugin uses a user cache directory such as `~/.cache/claude-jev` on Unix-like systems. A session filename is a hash of `session_id` and `agent_id`, never the raw identifier. The plugin writes files atomically and bounds each file. State is not sent to TypeSafe except for the selected prompt and tool fields described above.
+Session overrides, last verdicts, recent prompt text, cache entries, in-flight lock metadata, and warning timestamps are local state. Root precedence is hook `scratchpad_dir`, then `CLAUDE_PLUGIN_DATA/sessions`, then legacy fallback `~/.cache/claude-jev`. A session filename is a hash of `session_id` and `agent_id`, never the raw identifier. Per-session locks serialize mutations; atomic rename protects complete records. State is not sent to TypeSafe except for selected prompt and tool fields described above.
 
 ## Caching and concurrent deduplication
 
@@ -404,7 +404,7 @@ This is semantic guidance, not a hard security sandbox. A Bash command that exfi
 
 The gate uses one request for four questions. The output judge uses one request for two questions. Disabled judges make no request. Identical state reuses a cache result, and parallel identical hook processes coordinate through the local lock.
 
-Pre-tool hooks are synchronous because Claude must receive a decision before execution. Post-tool hooks are synchronous when they need to replace Bash output. A configured hook timeout must exceed the client timeout and retry budget, with no unbounded wait. Hook cold-start time will be measured after the vertical slice using a local fixture server and recorded in test output without logging request content.
+Pre-tool hooks are synchronous because Claude must receive a decision before execution. Post-tool hooks are synchronous when they may replace Bash output. Client has one 15-second total request deadline covering connection, body read, parsing, delays, and every retry. Matching hook timeout is 20 seconds. Cache wait is bounded within that hook budget.
 
 The plugin does not load large dependencies or start a daemon. If measured process startup and file locking are a daily-use problem, that is a later optimization decision, not a reason to add a background service before evidence exists.
 
@@ -422,7 +422,7 @@ Other non-equivalences are:
 - Pi can append a result block directly from its result handler. Claude has structured output replacement for successful PostToolUse only, and the replacement must match the tool's schema.
 - Claude hook processes do not share Pi's in-memory Promise maps, so local file coordination replaces exact in-process deduplication.
 - Claude's transcript can lag the current prompt. The extra `UserPromptSubmit` state writer improves scope context but still cannot reconstruct prior Pi context APIs.
-- A hook can request `ask`, but interactive behavior depends on Claude's current permission mode and whether the run has a permission host. No plugin can promise an interactive prompt in every headless or bypass-permissions environment.
+- A hook can request `ask`, but hook input does not identify every missing prompt host. Documented `dontAsk` and `bypassPermissions` modes are handled explicitly; other modes defer prompt behavior to Claude Code.
 
 ## Risks and mitigations
 
@@ -488,13 +488,9 @@ claude-jev/
 
 Compiled `dist/` files are build artifacts and are not hand-edited. The published plugin must include them or use its package installation build step before hooks run.
 
-## Implementation phases
+## Implementation status
 
-1. **Research and design:** this document and the implementation plan establish hook contracts, data flow, failure behavior, and Pi limitations.
-2. **Minimal vertical slice:** compile the direct client and run a Bash-only `PreToolUse` gate in shadow mode.
-3. **Gate completion:** add Write/Edit, session state, file-backed cache, config layering, and enforce `ask` mode.
-4. **Output lifecycle:** add successful and failed Bash normalization, secret detection, fixed failure advice, deduplication, and conservative successful-output replacement.
-5. **UX and packaging:** add the CLI, concise skill, tests, README, plugin validation, package checks, and opt-in real API tests.
+Gate, output lifecycle, direct TypeSafe client, locked session state, coordinated cache, CLI, skill, packaging, and opt-in real API tests are implemented. Generated `dist/` files ship with plugin and must match a fresh TypeScript build.
 
 ## Sources read
 

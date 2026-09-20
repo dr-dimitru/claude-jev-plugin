@@ -512,6 +512,35 @@ describe("claude-jev CLI", { concurrency: false }, () => {
     });
   });
 
+  describe("documentation", () => {
+    it("documents opt-in lifecycle, trusted transport, state, and total deadline", () => {
+      const readme = fs.readFileSync(path.join(REPO_ROOT, "README.md"), "utf8");
+      for (const marker of [
+        "defaultEnabled",
+        "/plugin enable claude-jev@dr-dimitru-claude-tools",
+        "/plugin update claude-jev@dr-dimitru-claude-tools",
+        "/plugin disable claude-jev@dr-dimitru-claude-tools",
+        "/plugin uninstall claude-jev@dr-dimitru-claude-tools",
+        "BSD-3-Clause",
+        "Project configuration cannot set",
+        "CLAUDE_PLUGIN_DATA/sessions",
+        "total request deadline",
+      ]) {
+        assert.ok(readme.includes(marker), `README is missing: ${marker}`);
+      }
+      assert.doesNotMatch(readme, /non-interactive run[^\n]*therefore fails open/i);
+    });
+
+    it("marks architecture as implemented and reviewed", () => {
+      const architecture = fs.readFileSync(
+        path.join(REPO_ROOT, "docs", "architecture.md"),
+        "utf8"
+      );
+      assert.match(architecture, /Status: Implemented and reviewed/);
+      assert.doesNotMatch(architecture, /Runtime code is not implemented yet/);
+    });
+  });
+
   describe("Skill content markers in skills/jev/SKILL.md", () => {
     it("skills/jev/SKILL.md exists with valid frontmatter", () => {
       assert.ok(fs.existsSync(SKILL_PATH), "skills/jev/SKILL.md must exist");

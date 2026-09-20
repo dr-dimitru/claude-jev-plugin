@@ -1,84 +1,104 @@
 # claude-jev
 
-`claude-jev` adds TypeSafe Jev as a semantic decision layer around Claude Code tool execution.
+`claude-jev` adds TypeSafe Jev semantic judgments to Claude Code tool execution.
 
 - `PreToolUse` judges Bash, Write, and Edit calls.
 - `PostToolUse` judges successful Bash output.
 - `PostToolUseFailure` judges failed Bash output.
-- All requests go directly from local plugin code to TypeSafe's HTTPS API.
-- The plugin does not define or start an MCP server.
+- Requests go directly from local plugin code to TypeSafe's HTTPS API.
+- Plugin has no MCP server.
 
-This is a semantic guardrail, not a hard security sandbox. Jev can be unavailable or wrong. Claude Code permission rules remain the hard control.
+This plugin is a semantic guardrail, not a security sandbox. TypeSafe can be unavailable or wrong. Claude Code permission rules remain the hard control.
 
-## Installation
+License: `BSD-3-Clause`.
 
-For local development:
+## Install and enable
 
-```bash
-claude --plugin-dir /path/to/claude-jev
+Remote installation requires readable GitHub repositories for both marketplace and plugin.
+
+```text
+/plugin marketplace add dr-dimitru/claude-plugins-marketplace
+/plugin install claude-jev@dr-dimitru-claude-tools --scope user
 ```
 
-For a published plugin, add its marketplace and install it with Claude Code's plugin manager. Enable it at user scope to make hooks available across projects. Plugin installation and marketplace commands depend on the marketplace source.
-
-Set the API key in the environment before starting Claude Code:
+Plugin manifest sets `defaultEnabled` to `false`. Enabling it sends bounded data to an external service and may incur TypeSafe API cost. Review [Privacy and data flow](#privacy-and-data-flow), then set key outside project configuration:
 
 ```bash
 export TYPESAFE_API_KEY="..."
 ```
 
-The key is sent only as a Bearer token to `https://api.typesafe.ai/v1/systemone`. Do not put it in project configuration or commit it.
+Enable and reload:
 
-## How it works
+```text
+/plugin enable claude-jev@dr-dimitru-claude-tools
+/reload-plugins
+```
 
-Claude Code starts a local command hook for each matching event. The hook reads structured JSON from stdin, bounds the fields it needs, calls TypeSafe, and writes either no output or one valid JSON hook response to stdout.
+For local development:
+
+```bash
+claude --plugin-dir /path/to/claude-jev-plugin
+```
+
+API key is sent only as Bearer token to configured HTTPS TypeSafe endpoint. Do not commit it or place it in project configuration.
+
+## Update, disable, and uninstall
+
+```text
+/plugin update claude-jev@dr-dimitru-claude-tools
+/plugin disable claude-jev@dr-dimitru-claude-tools
+/plugin uninstall claude-jev@dr-dimitru-claude-tools
+```
+
+Claude Code removes plugin data on uninstall unless `--keep-data` is passed. Legacy fallback state under `~/.cache/claude-jev` is outside Claude's plugin-data lifecycle and must be removed manually if no longer needed.
+
+## How judgments work
+
+Claude Code invokes one local command hook for each matching event. Hook reads bounded JSON from stdin, calls TypeSafe, and writes either no output or one valid Claude hook response.
 
 ```text
 Claude Code
   -> command hook
-  -> local config/state and TypeSafe client
-  -> HTTPS POST /v1/systemone
-  -> typed verdict
-  -> Claude Code permission or output response
+  -> bounded local state
+  -> HTTPS POST https://api.typesafe.ai/v1/systemone
+  -> validated typed answers
+  -> local threshold composition
+  -> Claude Code hook response
 ```
 
-The pre-tool gate sends four independent questions in one request:
+Pre-tool gate sends four independent questions in one API request:
 
 | Question | Type | Default threshold |
 | --- | --- | ---: |
-| Is this action destructive? | Noul | `0.90` |
-| Does it send local data or secrets off-machine? | Noul | `0.70` |
-| Does it affect anything beyond the requested change? | Noul | `0.85` |
-| How much damage would it do if unwanted? | Score, four levels | `2.50` |
+| Is action destructive? | Noul | `0.90` |
+| Does action send local data or secrets off-machine? | Noul | `0.70` |
+| Does action exceed requested scope? | Noul | `0.85` |
+| How damaging would unwanted action be? | Score | `2.50`, confidence at least `0.50` |
 
-Shadow mode is default. A flagged call produces a short warning and continues. Enforce mode returns Claude Code's native `permissionDecision: "ask"`. The plugin never auto-approves a call because Jev is confident.
+Shadow mode is default. Flagged action produces short warning and continues. Enforce mode returns Claude Code's native `permissionDecision: "ask"`. Plugin never returns `allow` from TypeSafe confidence.
 
-Successful and failed Bash output use one request containing:
+Successful and failed Bash results send two questions in one request:
 
-- `leaks_secret`, a Noul question with threshold `0.90`;
-- `failure_class`, a Choice question with minimum confidence `0.60`.
+- `leaks_secret`, Noul threshold `0.90`;
+- `failure_class`, Choice confidence threshold `0.60`.
 
-Failure advice is fixed local code:
-
-- `transient`: retry may be appropriate;
-- `environment`: fix the environment;
-- `code_bug`: fix code or types;
-- `permission`: resolve access instead of blindly retrying;
-- `user_error`: fix invocation or input;
-- `no_failure`: no advice.
-
-Jev never generates this advice.
+Failure advice is fixed local text for `transient`, `environment`, `code_bug`, `permission`, and `user_error`. TypeSafe does not generate advice.
 
 ## Failure behavior
 
-The plugin fails open when TypeSafe infrastructure cannot provide a judgment. Missing keys, timeouts, network failures, HTTP 429, malformed responses, and TypeSafe outages let the tool call proceed. Diagnostics are rate-limited and API keys are redacted.
+Plugin fails open when no validated judgment is available. Missing key, invalid config, timeout, network failure, retry exhaustion, HTTP 429 or 529, malformed response, cache coordination timeout, state failure, and Claude hook timeout do not create permission denial.
 
-A Jev safety verdict and a missing Jev verdict are separate states. A validated flagged response can ask for permission. A failed request cannot.
+No-verdict state is never cached as clear. Diagnostics use fixed local wording and do not include API response bodies, parser excerpts, prompts, commands, output, or credentials.
 
-`gate.blockWithoutUI` defaults to `false`. In a non-interactive run, enforce mode therefore fails open unless this option is enabled. With it enabled, a flagged call returns native `permissionDecision: "deny"`.
+Client uses one 15-second total request deadline. Deadline includes connection, response-body read, JSON parsing, retry delays, and all attempts. Retries use bounded exponential backoff and honor `Retry-After` only when delay fits remaining budget. Claude hook timeout is 20 seconds.
+
+Enforce mode asks when prompt-host availability is unknown. Claude hook payload does not expose universal headless or prompt-host field. Plugin recognizes documented `permission_mode` values `dontAsk` and `bypassPermissions` as non-interactive. For those modes, `gate.blockWithoutUI: false` fails open and `true` returns `deny`. Plugin makes no broader headless-detection claim.
 
 ## Privacy and data flow
 
-The plugin never sends the full Claude conversation by default. It sends these bounded fields for a gate:
+Plugin never reads full transcript. `UserPromptSubmit` stores bounded prompt only when gate is enabled and key is configured.
+
+Gate request contains:
 
 ```json
 {
@@ -92,7 +112,7 @@ The plugin never sends the full Claude conversation by default. It sends these b
 }
 ```
 
-For Bash output it sends:
+Output request contains:
 
 ```json
 {
@@ -104,21 +124,21 @@ For Bash output it sends:
 }
 ```
 
-The serialized request state is capped at 8000 characters. `Write` and `Edit` arguments may contain source code or diff content. Long strings are truncated locally before the HTTPS request. The omitted text stays local.
+Serialized state is capped at 8000 characters. Write/Edit content, user prompts, commands, and command output can leave machine. Secret detection requires sending bounded output to TypeSafe, and that output may itself contain a secret. Omitted text remains local.
 
-Secret detection requires TypeSafe to see the bounded output. If Jev flags a recognized successful Bash response, the plugin replaces the output Claude receives with a generic warning. It does not guess secret spans or run global regex replacements. The command has already run, so replacement cannot undo command side effects, network transfers, or telemetry. Failed output has no Claude-supported replacement field; the failure hook can warn but cannot replace it.
+Positive leak judgment replaces recognized successful Bash output before Claude sees it. Original output already existed in process and may already appear in telemetry. `PostToolUseFailure` cannot replace failed output, so failure hook can only warn and add context.
 
-The API key is never included in state, verdict summaries, cache keys, or errors.
+Plugin never includes session ID, transcript path, agent identity, API key, or raw cache record in TypeSafe state.
 
 ## Configuration
 
-Global configuration:
+Global user configuration:
 
 ```text
 ~/.claude/claude-jev.json
 ```
 
-Project configuration:
+Project judgment configuration:
 
 ```text
 .claude/claude-jev.json
@@ -127,14 +147,17 @@ Project configuration:
 Precedence:
 
 ```text
-defaults -> global config -> project config -> environment secret -> session override
+defaults -> global config -> project judgment config -> environment key -> session override
 ```
 
-Example:
+Project configuration cannot set `model`, `endpoint`, `timeoutMs`, `retries`, `apiKey`, or `apiKeyFile`. This prevents repository-controlled credential redirection. These transport fields are accepted only from trusted global configuration; plaintext JSON `apiKey` is not accepted. Relative global `apiKeyFile` resolves under `~/.claude`.
+
+Every endpoint must use HTTPS and cannot contain embedded credentials.
+
+Example project configuration:
 
 ```json
 {
-  "model": "jev-latest",
   "maxStateChars": 8000,
   "gate": {
     "enabled": true,
@@ -161,91 +184,75 @@ Example:
 }
 ```
 
-Optional transport fields are `endpoint`, `timeoutMs`, and `retries`. The source-compatible optional `apiKeyFile` is supported, but `TYPESAFE_API_KEY` is recommended. Plaintext `apiKey` config is not required.
+Example trusted global transport configuration:
 
-## Caching and performance
+```json
+{
+  "model": "jev-latest",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "timeoutMs": 15000,
+  "retries": 2,
+  "apiKeyFile": "typesafe.key"
+}
+```
 
-Gate results use a session-local cache with a 120-second default TTL. Keys include normalized bounded judgment input, model, and questions. Object keys are sorted before hashing. Concurrent hook processes coordinate through bounded local lock files. Infrastructure failures are never cached as clear verdicts.
+## Cache and session state
 
-Output results use the same session-local coordination and a fixed 120-second TTL. Safe judgments produce no model-visible context. Hook startup and TypeSafe request time add latency to matching tool calls. The plugin uses Node built-ins and does not start a daemon.
+Cache keys include exact bounded request state, current directory, model, questions, effective thresholds, and payload bounds. Session and optional subagent identities isolate cache directories. Concurrent processes coordinate with renewable lock files; waiters do not start duplicate requests on timeout.
 
-## Commands and skill
+State path precedence:
 
-The plugin provides one namespaced skill:
+1. Claude `scratchpad_dir` when supplied;
+2. `CLAUDE_PLUGIN_DATA/sessions`;
+3. legacy fallback `~/.cache/claude-jev`.
+
+Files use restrictive permissions. Scratchpad lifetime is owned by Claude Code. Plugin data persists across updates and is removed by standard uninstall unless `--keep-data` is used. Legacy fallback has no automatic retention sweep.
+
+## CLI and skill
+
+Plugin provides namespaced skill:
 
 ```text
 /claude-jev:jev
 ```
 
-It explains Jev question types and when explicit judgments help. Automatic hooks do not depend on Claude invoking this skill.
-
-The bundled CLI provides the Pi-style operations:
+Automatic hooks do not depend on skill invocation. Main manual operation is:
 
 ```bash
-claude-jev status
+claude-jev check "text or command to judge"
+```
+
+Inspection and advanced exact-session controls:
+
+```bash
+claude-jev status [--session-id <id>]
 claude-jev enable --session-id <id>
 claude-jev disable --session-id <id>
 claude-jev mode shadow --session-id <id>
 claude-jev mode enforce --session-id <id>
 claude-jev last --session-id <id>
 claude-jev output --session-id <id>
-claude-jev check "text or command to judge"
 ```
 
-Use `--scratchpad-dir` when inspecting a session whose hooks use a specific scratchpad directory. Claude Code does not document a session-ID environment variable for skill subprocesses. Exact session toggles therefore require `--session-id`; they never mutate permanent configuration. Without it, `status` reports session state as unknown.
+Claude does not document session-ID environment variable for skill subprocesses. Exact controls require explicit hook session ID and, when applicable, `--scratchpad-dir`. They never edit persistent config.
 
-This CLI and skill are the closest native alternative to Pi's `jev_ask`. They do not create a persistent Claude tool surface or use MCP.
-
-## Testing
-
-Unit tests use fixed Jev responses and local HTTP fixtures. They cover:
-
-- gate composition and calibration fixtures;
-- output classification and leak handling;
-- truncation and aggregate state bounds;
-- config precedence;
-- session cache and lock behavior;
-- malformed API and hook payloads;
-- exact Claude hook response shapes;
-- CLI session and manual-check behavior.
-
-Run:
+## Test and validate
 
 ```bash
-npm test
-npm run build
+npm ci --ignore-scripts
+npm run check
+npm run validate:plugin
+npm pack --dry-run --json
 ```
 
-Real TypeSafe API tests are not part of the normal test command. If added for local calibration, run them only with an explicit `TYPESAFE_API_KEY` and an opt-in flag.
+Normal suite uses fixed responses and local fetch fixtures. Real TypeSafe tests require both `CLAUDE_JEV_REAL_API=1` and preconfigured `TYPESAFE_API_KEY`; they skip otherwise.
 
-## Inspecting and disabling judgments
+## Current limitations
 
-Use `claude-jev last --session-id <id>` and `claude-jev output --session-id <id>` to inspect the latest local verdict summaries. They do not print raw state, output, or secrets.
-
-Disable both automatic paths in project config:
-
-```json
-{
-  "gate": {"enabled": false},
-  "output": {"enabled": false}
-}
-```
-
-For a current session, use the CLI session override with its exact session ID:
-
-```bash
-claude-jev disable --session-id <id>
-```
-
-## Limitations compared with pi-jev
-
-- Claude hook notifications, status UI, and prompts are not Pi's UI. `systemMessage`, `additionalContext`, and native permission decisions are the closest equivalents.
-- `PostToolUseFailure` cannot replace failed output.
-- Hook processes do not share Pi's in-memory state, so cache and verdict state use bounded local files.
-- Skills do not receive the hook `session_id` through a documented environment variable.
-- `jev_ask` is not reproduced as a persistent model tool. The skill and CLI are the supported alternative.
-- Claude permission mode can limit whether an `ask` prompt is serviceable in headless or bypass-permissions runs.
-
-## Uninstall
-
-Remove the plugin through Claude Code's plugin manager, or stop passing `--plugin-dir /path/to/claude-jev`. Remove `~/.claude/claude-jev.json`, project `.claude/claude-jev.json`, and local session state if you no longer need them. Unsetting `TYPESAFE_API_KEY` prevents API requests but does not remove hooks from an installed plugin.
+- TypeSafe judgments are probabilistic.
+- Hooks fail open on infrastructure and timeout failures.
+- `updatedToolOutput` cannot undo command effects or prior telemetry.
+- Failed tool output cannot be replaced through `PostToolUseFailure`.
+- Skill subprocesses do not receive documented hook session ID.
+- Plugin needs Node.js `>=22.6` on PATH.
+- Remote marketplace installation requires accessible GitHub repositories.
