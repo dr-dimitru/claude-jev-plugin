@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { runPostTool } from "../src/hooks/post-tool.ts";
+import { runPostToolFailure } from "../src/hooks/post-tool-failure.ts";
 import { clearRegisteredApiKeys } from "../src/client.ts";
 import { clearMemoryCache } from "../src/cache.ts";
 import {
@@ -402,9 +403,21 @@ describe("PostToolUse Hook", () => {
     assert.strictEqual(second, null); // Duplicate tool_use_id suppressed
   });
 
-  it("infrastructure failure: fails open with rate-limited diagnostic", async () => {
+  it("infrastructure failure fails open and releases the tool-use claim", async () => {
+    let shouldFail = true;
     const askJevFn = async () => {
-      throw new Error("Network timeout after 20000ms");
+      if (shouldFail) throw new Error("Network timeout after 15000ms");
+      return {
+        answers: {
+          leaks_secret: { type: "noul" as const, noul: 0.01 },
+          failure_class: {
+            type: "choice" as const,
+            choice: "no_failure",
+            probabilities: { no_failure: 1 },
+            confidence: 1,
+          },
+        },
+      };
     };
 
     const payload = {
@@ -413,6 +426,7 @@ describe("PostToolUse Hook", () => {
       scratchpad_dir: tmpDir,
       hook_event_name: "PostToolUse",
       tool_name: "Bash",
+      tool_use_id: "toolu_infra_retry",
       tool_input: { command: "npm test" },
       tool_response: { stdout: "tests passed" },
     };
@@ -437,6 +451,13 @@ describe("PostToolUse Hook", () => {
     assert.ok(result);
     assert.ok(result.systemMessage?.includes("infrastructure error"));
     assert.strictEqual(result.hookSpecificOutput, undefined);
+
+    shouldFail = false;
+    const retry = await runPostTool(payload, {
+      askJevFn: askJevFn as any,
+      config,
+    });
+    assert.equal(retry, null);
   });
 
   it("output shape validity: schema valid JSON with hookSpecificOutput and systemMessage", async () => {
@@ -567,6 +588,67 @@ describe("PostToolUse Hook", () => {
     assert.ok(resKey);
     assert.ok(resKey.systemMessage?.includes("TYPESAFE_API_KEY is not configured"));
     assert.strictEqual(called, false);
+  });
+
+  it("atomically deduplicates concurrent success and failure events for one tool use", async () => {
+    let callCount = 0;
+    const askJevFn = async () => {
+      callCount++;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return {
+        answers: {
+          leaks_secret: { type: "noul" as const, noul: 0.01 },
+          failure_class: {
+            type: "choice" as const,
+            choice: "no_failure",
+            probabilities: { no_failure: 1 },
+            confidence: 1,
+          },
+        },
+      };
+    };
+    const base = {
+      session_id: "sess-cross-event",
+      cwd: tmpDir,
+      scratchpad_dir: tmpDir,
+      tool_name: "Bash",
+      tool_use_id: "toolu_cross_event",
+      tool_input: { command: "npm test" },
+    };
+    const config: any = {
+      model: "jev-latest",
+      apiKey: "test-api-key",
+      maxStateChars: 8000,
+      gate: { argumentChars: 400 },
+      output: {
+        enabled: true,
+        tools: ["Bash"],
+        outputChars: 2000,
+        leakThreshold: 0.9,
+        minConfidence: 0.6,
+      },
+    };
+
+    await Promise.all([
+      runPostTool(
+        {
+          ...base,
+          hook_event_name: "PostToolUse",
+          tool_response: { stdout: "ok", stderr: "" },
+        },
+        { askJevFn: askJevFn as any, config }
+      ),
+      runPostToolFailure(
+        {
+          ...base,
+          hook_event_name: "PostToolUseFailure",
+          error: "Exit code 1",
+        },
+        { askJevFn: askJevFn as any, config }
+      ),
+    ]);
+
+    assert.equal(callCount, 1);
   });
 
   it("concurrent identical PostToolUse payloads share cache coordination and run ask function once", async () => {

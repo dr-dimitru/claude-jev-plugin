@@ -145,6 +145,8 @@ export interface SessionStore {
   getLastVerdict(type?: "gate" | "output"): Promise<unknown>;
   setLastVerdict(type: "gate" | "output", verdict: unknown): Promise<void>;
   hasSeenToolUseId(toolUseId: string): Promise<boolean>;
+  claimToolUseId(toolUseId: string): Promise<boolean>;
+  releaseToolUseId(toolUseId: string): Promise<void>;
   recordToolUseId(toolUseId: string): Promise<void>;
   getCacheMetadata(key: string): Promise<unknown>;
   setCacheMetadata(key: string, value: unknown): Promise<void>;
@@ -211,42 +213,32 @@ export function sessionStore(options: SessionStoreOptions): SessionStore {
     }
   }
 
-  async function write(data: Partial<SessionRecord>): Promise<void> {
-    ensureDir();
+  const lockPath = `${filePath}.lock`;
 
-    const existing = (await read()) ?? {
-      sessionIdHash: hashedName,
-      updatedAt: Date.now(),
-    };
-
-    const record: SessionRecord = {
-      ...existing,
-      ...data,
-      sessionIdHash: hashedName,
-      updatedAt: Date.now(),
-    };
-
-    // Keep bounded: prune seenToolUseIds if too many
+  function prepareRecord(record: SessionRecord): string {
     if (record.seenToolUseIds && record.seenToolUseIds.length > 100) {
       record.seenToolUseIds = record.seenToolUseIds.slice(-100);
     }
 
     let serialized = JSON.stringify(record, null, 2);
     if (Buffer.byteLength(serialized, "utf-8") > maxRecordBytes) {
-      // Bound cache metadata and prompt if oversized
-      if (record.cacheMetadata) {
-        record.cacheMetadata = {};
-      }
+      if (record.cacheMetadata) record.cacheMetadata = {};
       if (record.seenToolUseIds && record.seenToolUseIds.length > 20) {
         record.seenToolUseIds = record.seenToolUseIds.slice(-20);
       }
       serialized = JSON.stringify(record, null, 2);
     }
+    if (Buffer.byteLength(serialized, "utf-8") > maxRecordBytes) {
+      throw new Error("Session record exceeds maximum size");
+    }
+    return serialized;
+  }
 
-    // Atomic write via temp file + rename
+  async function writeRecord(record: SessionRecord): Promise<void> {
+    ensureDir();
+    const serialized = prepareRecord(record);
     const randomSuffix = crypto.randomBytes(6).toString("hex");
     const tempFile = `${filePath}.${Date.now()}.${randomSuffix}.tmp`;
-
     try {
       await fs.promises.writeFile(tempFile, serialized, {
         encoding: "utf-8",
@@ -254,33 +246,97 @@ export function sessionStore(options: SessionStoreOptions): SessionStore {
       });
       await fs.promises.rename(tempFile, filePath);
     } catch (err) {
-      try {
-        if (fs.existsSync(tempFile)) {
-          await fs.promises.unlink(tempFile);
-        }
-      } catch {
-        // ignore unlink error
-      }
+      await fs.promises.unlink(tempFile).catch(() => {});
       throw err;
     }
+  }
+
+  async function withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    ensureDir();
+    const startedAt = Date.now();
+    const ownerToken = crypto.randomBytes(16).toString("hex");
+
+    while (true) {
+      let handle: fs.promises.FileHandle | undefined;
+      try {
+        handle = await fs.promises.open(
+          lockPath,
+          fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+          0o600
+        );
+        await handle.writeFile(
+          JSON.stringify({ ownerToken, pid: process.pid, createdAt: Date.now() }),
+          "utf-8"
+        );
+        await handle.close();
+        handle = undefined;
+        break;
+      } catch (error: any) {
+        if (handle) await handle.close().catch(() => {});
+        if (error?.code !== "EEXIST") throw error;
+        try {
+          const stat = await fs.promises.stat(lockPath);
+          if (Date.now() - stat.mtimeMs > 5000) {
+            await fs.promises.unlink(lockPath).catch(() => {});
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        if (Date.now() - startedAt >= 2000) {
+          throw new Error("Session state lock timeout");
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+
+    try {
+      return await operation();
+    } finally {
+      try {
+        const metadata = JSON.parse(await fs.promises.readFile(lockPath, "utf-8"));
+        if (metadata?.ownerToken === ownerToken) {
+          await fs.promises.unlink(lockPath).catch(() => {});
+        }
+      } catch {
+        // A missing or replaced lock is not ours to remove.
+      }
+    }
+  }
+
+  async function write(data: Partial<SessionRecord>): Promise<void> {
+    await withMutationLock(async () => {
+      const existing = (await read()) ?? {
+        sessionIdHash: hashedName,
+        updatedAt: Date.now(),
+      };
+      await writeRecord({
+        ...existing,
+        ...data,
+        sessionIdHash: hashedName,
+        updatedAt: Date.now(),
+      });
+    });
   }
 
   async function update(
     updater: (current: SessionRecord) => Partial<SessionRecord> | SessionRecord
   ): Promise<SessionRecord> {
-    const current = (await read()) ?? {
-      sessionIdHash: hashedName,
-      updatedAt: Date.now(),
-    };
-    const updated = updater(current);
-    const merged: SessionRecord = {
-      ...current,
-      ...updated,
-      sessionIdHash: hashedName,
-      updatedAt: Date.now(),
-    };
-    await write(merged);
-    return merged;
+    return withMutationLock(async () => {
+      const current = (await read()) ?? {
+        sessionIdHash: hashedName,
+        updatedAt: Date.now(),
+      };
+      const updated = updater(current);
+      const merged: SessionRecord = {
+        ...current,
+        ...updated,
+        sessionIdHash: hashedName,
+        updatedAt: Date.now(),
+      };
+      await writeRecord(merged);
+      return merged;
+    });
   }
 
   async function getPrompt(): Promise<string | undefined> {
@@ -340,17 +396,33 @@ export function sessionStore(options: SessionStoreOptions): SessionStore {
     return record?.seenToolUseIds?.includes(toolUseId) ?? false;
   }
 
-  async function recordToolUseId(toolUseId: string): Promise<void> {
-    await update((current) => {
-      const existing = current.seenToolUseIds ?? [];
-      if (existing.includes(toolUseId)) {
-        return current;
-      }
-      return {
-        ...current,
-        seenToolUseIds: [...existing, toolUseId],
+  async function claimToolUseId(toolUseId: string): Promise<boolean> {
+    return withMutationLock(async () => {
+      const current = (await read()) ?? {
+        sessionIdHash: hashedName,
+        updatedAt: Date.now(),
       };
+      const existing = current.seenToolUseIds ?? [];
+      if (existing.includes(toolUseId)) return false;
+      await writeRecord({
+        ...current,
+        seenToolUseIds: [...existing, toolUseId].slice(-100),
+        sessionIdHash: hashedName,
+        updatedAt: Date.now(),
+      });
+      return true;
     });
+  }
+
+  async function releaseToolUseId(toolUseId: string): Promise<void> {
+    await update((current) => ({
+      ...current,
+      seenToolUseIds: (current.seenToolUseIds ?? []).filter(id => id !== toolUseId),
+    }));
+  }
+
+  async function recordToolUseId(toolUseId: string): Promise<void> {
+    await claimToolUseId(toolUseId);
   }
 
   async function getCacheMetadata(key: string): Promise<unknown> {
@@ -380,6 +452,8 @@ export function sessionStore(options: SessionStoreOptions): SessionStore {
     getLastVerdict,
     setLastVerdict,
     hasSeenToolUseId,
+    claimToolUseId,
+    releaseToolUseId,
     recordToolUseId,
     getCacheMetadata,
     setCacheMetadata,

@@ -137,6 +137,7 @@ export async function runPostToolFailure(
     agentId,
     scratchpadDir,
   });
+  let claimedToolUseId: string | undefined;
 
   try {
     // 2. Load configuration and session overrides
@@ -170,8 +171,10 @@ export async function runPostToolFailure(
     // 5. Prevent duplicate tool_use_id judging
     const toolUseId =
       typeof payload.tool_use_id === "string" ? payload.tool_use_id : undefined;
-    if (toolUseId && (await store.hasSeenToolUseId(toolUseId))) {
-      return null;
+    if (toolUseId) {
+      const claimed = await store.claimToolUseId(toolUseId);
+      if (!claimed) return null;
+      claimedToolUseId = toolUseId;
     }
 
     // 6. Judge output via getOrCreateCached (normalizes top-level error, exactly one batched request, stores last verdict)
@@ -234,9 +237,6 @@ export async function runPostToolFailure(
       }
     );
 
-    if (toolUseId) {
-      await store.recordToolUseId(toolUseId);
-    }
     await store.setLastVerdict("output", verdict);
 
     // 7. Format Claude hook JSON (PostToolUseFailure has NO output replacement field)
@@ -272,6 +272,9 @@ export async function runPostToolFailure(
     // Clear verdict: safe output emits nothing
     return null;
   } catch (err: any) {
+    if (claimedToolUseId) {
+      await store.releaseToolUseId(claimedToolUseId).catch(() => {});
+    }
     return await emitRateLimitedDiagnostic(
       `claude-jev: infrastructure error: ${err.message}`,
       store

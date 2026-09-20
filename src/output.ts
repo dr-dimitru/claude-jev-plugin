@@ -413,15 +413,15 @@ export async function judgeOutput(
   const normalized = normalizeToolOutput(payload);
   const store = options?.sessionStore;
 
-  // Duplicate tool_use_id suppression
+  let claimedToolUseId: string | undefined;
   if (store && normalized.toolUseId) {
-    const seen = await store.hasSeenToolUseId(normalized.toolUseId);
-    if (seen) {
+    const claimed = await store.claimToolUseId(normalized.toolUseId);
+    if (!claimed) {
       const last = await store.getLastVerdict("output");
-      if (last && typeof last === "object") {
-        return last as OutputVerdict;
-      }
+      if (last && typeof last === "object") return last as OutputVerdict;
+      throw new Error("Duplicate output judgment is already in progress");
     }
+    claimedToolUseId = normalized.toolUseId;
   }
 
   const askFn = options?.askJevFn ?? askJev;
@@ -443,16 +443,24 @@ export async function judgeOutput(
       : undefined,
   });
 
-  const response = await askFn({
-    model: config?.model ?? DEFAULT_MODEL,
-    state: boundedState,
-    questions: OUTPUT_QUESTIONS,
-    apiKey: config?.apiKey,
-    endpoint: config?.endpoint,
-    timeoutMs: config?.timeoutMs,
-    retries: config?.retries,
-    signal: options?.signal,
-  });
+  let response: JevResponse;
+  try {
+    response = await askFn({
+      model: config?.model ?? DEFAULT_MODEL,
+      state: boundedState,
+      questions: OUTPUT_QUESTIONS,
+      apiKey: config?.apiKey,
+      endpoint: config?.endpoint,
+      timeoutMs: config?.timeoutMs,
+      retries: config?.retries,
+      signal: options?.signal,
+    });
+  } catch (error) {
+    if (store && claimedToolUseId) {
+      await store.releaseToolUseId(claimedToolUseId).catch(() => {});
+    }
+    throw error;
+  }
 
   const verdict = evaluateOutput(response, config);
 
@@ -461,9 +469,6 @@ export async function judgeOutput(
   }
 
   if (store) {
-    if (normalized.toolUseId) {
-      await store.recordToolUseId(normalized.toolUseId);
-    }
     await store.setLastVerdict("output", verdict);
   }
 

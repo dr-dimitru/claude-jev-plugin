@@ -156,6 +156,34 @@ describe("hook-io", () => {
       assert.equal(prompt, longPrompt.slice(-1200));
     });
 
+    it("preserves fields across concurrent session updates", async () => {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const store = sessionStore({
+          sessionId: `concurrent-${attempt}`,
+          scratchpadDir,
+        });
+        await Promise.all([
+          store.setPrompt("prompt"),
+          store.setOverrides({ mode: "enforce" }),
+          store.setLastVerdict("gate", { flagged: true }),
+          store.setCacheMetadata("diagnostic", 1),
+        ]);
+        const record = await store.read();
+        assert.equal(record?.prompt, "prompt");
+        assert.equal(record?.overrides?.mode, "enforce");
+        assert.deepEqual(record?.lastGateVerdict, { flagged: true });
+        assert.equal(record?.cacheMetadata?.diagnostic, 1);
+      }
+    });
+
+    it("lets only one concurrent caller claim a tool use id", async () => {
+      const store = sessionStore({ sessionId: "claims", scratchpadDir });
+      const claims = await Promise.all(
+        Array.from({ length: 10 }, () => store.claimToolUseId("toolu_same"))
+      );
+      assert.equal(claims.filter(Boolean).length, 1);
+    });
+
     it("stores and retrieves session overrides", async () => {
       const store = sessionStore({
         sessionId: "sess-override-test",
