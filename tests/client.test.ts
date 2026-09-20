@@ -12,6 +12,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   DEFAULT_RETRIES,
   parseRetryAfter,
+  validateJevResponse,
   type JevCall,
   type JevQuestion,
   type JevResponse,
@@ -57,6 +58,7 @@ describe("TypeSafe Jev Client", () => {
             answers: {
               destructive: { type: "noul", noul: 0.12 },
             },
+            usage: { input_tokens: 1, output_tokens: 1 },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
@@ -107,9 +109,11 @@ describe("TypeSafe Jev Client", () => {
         capturedModel = body.model;
         return new Response(
           JSON.stringify({
+            model: "jev-custom-preview",
             answers: {
               q1: { type: "noul", noul: 0.05 },
             },
+            usage: { input_tokens: 1, output_tokens: 1 },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
@@ -170,7 +174,7 @@ describe("TypeSafe Jev Client", () => {
         const headers = new Headers(init?.headers);
         authHeader = headers.get("Authorization") ?? "";
         return new Response(
-          JSON.stringify({ answers: { q1: { type: "noul", noul: 0.1 } } }),
+          JSON.stringify({ model: "jev-latest", answers: { q1: { type: "noul", noul: 0.1 } }, usage: { input_tokens: 1, output_tokens: 1 } }),
           { status: 200 }
         );
       };
@@ -231,7 +235,7 @@ describe("TypeSafe Jev Client", () => {
           return new Response("Too Many Requests", { status: 429 });
         }
         return new Response(
-          JSON.stringify({ answers: { q1: { type: "noul", noul: 0.2 } } }),
+          JSON.stringify({ model: "jev-latest", answers: { q1: { type: "noul", noul: 0.2 } }, usage: { input_tokens: 1, output_tokens: 1 } }),
           { status: 200 }
         );
       };
@@ -256,7 +260,7 @@ describe("TypeSafe Jev Client", () => {
           return new Response("Site Overloaded", { status: 529 });
         }
         return new Response(
-          JSON.stringify({ answers: { q1: { type: "noul", noul: 0.3 } } }),
+          JSON.stringify({ model: "jev-latest", answers: { q1: { type: "noul", noul: 0.3 } }, usage: { input_tokens: 1, output_tokens: 1 } }),
           { status: 200 }
         );
       };
@@ -281,7 +285,7 @@ describe("TypeSafe Jev Client", () => {
           return new Response("Service Unavailable", { status: 503 });
         }
         return new Response(
-          JSON.stringify({ answers: { q1: { type: "noul", noul: 0.4 } } }),
+          JSON.stringify({ model: "jev-latest", answers: { q1: { type: "noul", noul: 0.4 } }, usage: { input_tokens: 1, output_tokens: 1 } }),
           { status: 200 }
         );
       };
@@ -306,7 +310,7 @@ describe("TypeSafe Jev Client", () => {
           throw new TypeError("fetch failed");
         }
         return new Response(
-          JSON.stringify({ answers: { q1: { type: "noul", noul: 0.5 } } }),
+          JSON.stringify({ model: "jev-latest", answers: { q1: { type: "noul", noul: 0.5 } }, usage: { input_tokens: 1, output_tokens: 1 } }),
           { status: 200 }
         );
       };
@@ -590,6 +594,127 @@ describe("TypeSafe Jev Client", () => {
   });
 
   describe("Response validation", () => {
+    const usage = { input_tokens: 1, output_tokens: 1 };
+
+    it("rejects a choice outside declared criteria", () => {
+      assert.throws(
+        () =>
+          validateJevResponse(
+            {
+              model: "jev-1.13.0",
+              answers: {
+                q: {
+                  type: "choice",
+                  choice: "unknown",
+                  probabilities: { allowed: 0.4, unknown: 0.6 },
+                  confidence: 0.2,
+                },
+              },
+              usage,
+            },
+            {
+              q: {
+                type: "choice",
+                instructions: "Choose",
+                criteria: { allowed: "Allowed" },
+              },
+            }
+          ),
+        (error: unknown) =>
+          error instanceof JevError && error.code === "MALFORMED_RESPONSE"
+      );
+    });
+
+    it("rejects malformed probability maps against declared criteria", () => {
+      const question: Record<string, JevQuestion> = {
+        q: {
+          type: "choice",
+          instructions: "Choose",
+          criteria: { first: "First", second: "Second" },
+        },
+      };
+      for (const probabilities of [
+        {},
+        { first: 0.4, second: 0.4 },
+        { first: 1, second: 0, extra: 0 },
+        { first: 1 },
+      ]) {
+        assert.throws(
+          () =>
+            validateJevResponse(
+              {
+                model: "jev-1.13.0",
+                answers: {
+                  q: {
+                    type: "choice",
+                    choice: "first",
+                    probabilities,
+                    confidence: 1,
+                  },
+                },
+                usage,
+              },
+              question
+            ),
+          (error: unknown) =>
+            error instanceof JevError && error.code === "MALFORMED_RESPONSE"
+        );
+      }
+    });
+
+    it("rejects score keys, legends, and values outside declared levels", () => {
+      const question: Record<string, JevQuestion> = {
+        q: { type: "score", instructions: "Rate", criteria: ["Low", "High"] },
+      };
+      for (const answer of [
+        {
+          type: "score",
+          score: 2,
+          legend: { "0": "Low", "1": "High" },
+          probabilities: { "0": 0, "1": 1 },
+          confidence: 1,
+        },
+        {
+          type: "score",
+          score: 1,
+          legend: { "0": "Wrong", "1": "High" },
+          probabilities: { "0": 0, "1": 1 },
+          confidence: 1,
+        },
+        {
+          type: "score",
+          score: 1,
+          legend: { "0": "Low", "1": "High" },
+          probabilities: { "0": 0, "2": 1 },
+          confidence: 1,
+        },
+      ]) {
+        assert.throws(
+          () =>
+            validateJevResponse(
+              { model: "jev-1.13.0", answers: { q: answer }, usage },
+              question
+            ),
+          (error: unknown) =>
+            error instanceof JevError && error.code === "MALFORMED_RESPONSE"
+        );
+      }
+    });
+
+    it("rejects missing required top-level model or usage", () => {
+      const questions: Record<string, JevQuestion> = {
+        q: { type: "noul", instructions: "Is it true?" },
+      };
+      assert.throws(
+        () => validateJevResponse({ answers: { q: { type: "noul", noul: 0.5 } }, usage }, questions),
+        (error: unknown) => error instanceof JevError && error.code === "MALFORMED_RESPONSE"
+      );
+      assert.throws(
+        () => validateJevResponse({ model: "jev-1.13.0", answers: { q: { type: "noul", noul: 0.5 } } }, questions),
+        (error: unknown) => error instanceof JevError && error.code === "MALFORMED_RESPONSE"
+      );
+    });
+
     it("validates documented current API response schema (noul, choice, score, usage)", async () => {
       const mockFetch: typeof fetch = async () => {
         return new Response(
@@ -648,6 +773,10 @@ describe("TypeSafe Jev Client", () => {
           criteria: {
             transient: "retry",
             environment: null,
+            code_bug: null,
+            permission: null,
+            user_error: null,
+            no_failure: null,
           },
         },
         impact: {
@@ -716,9 +845,9 @@ describe("TypeSafe Jev Client", () => {
               destructive: { type: "noul", noul: 0.95 },
               impact: {
                 type: "score",
-                score: 2.8,
-                legend: { low: "low", high: "high" },
-                probabilities: { low: 0.12, high: 0.88 },
+                score: 0.88,
+                legend: { "0": "low", "1": "high" },
+                probabilities: { "0": 0.12, "1": 0.88 },
                 confidence: 0.88,
               },
               failure_class: {
@@ -728,6 +857,7 @@ describe("TypeSafe Jev Client", () => {
                 confidence: 0.75,
               },
             },
+            usage: { input_tokens: 1, output_tokens: 1 },
           }),
           { status: 200 }
         );
@@ -751,7 +881,7 @@ describe("TypeSafe Jev Client", () => {
       });
 
       assert.equal(res.answers.destructive.noul, 0.95);
-      assert.equal(res.answers.impact.score, 2.8);
+      assert.equal(res.answers.impact.score, 0.88);
       assert.equal(res.answers.impact.confidence, 0.88);
       assert.equal(res.answers.failure_class.choice, "transient");
       assert.equal(res.answers.failure_class.confidence, 0.75);
@@ -1040,7 +1170,7 @@ describe("TypeSafe Jev Client", () => {
           await askJev({
             apiKey: "test-key",
             state: {},
-            questions: { q1: { type: "choice", instructions: "q", criteria: {} } },
+            questions: { q1: { type: "choice", instructions: "q", criteria: { a: "A" } } },
             fetch: mockFetch,
           });
         },

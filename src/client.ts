@@ -207,7 +207,8 @@ export function validateEndpoint(endpoint: string): string {
 
 function validateProbabilities(
   probs: unknown,
-  qName: string
+  qName: string,
+  expectedKeys: string[]
 ): Record<string, number> {
   if (!probs || typeof probs !== "object" || Array.isArray(probs)) {
     throw new JevError(
@@ -216,6 +217,21 @@ function validateProbabilities(
     );
   }
   const obj = probs as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  const actual = [...keys].sort();
+  const expected = [...expectedKeys].sort();
+  if (
+    keys.length === 0 ||
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== expected[index])
+  ) {
+    throw new JevError(
+      `Malformed answer for question '${qName}': probability keys must match declared criteria`,
+      { code: "MALFORMED_RESPONSE", retryable: false }
+    );
+  }
+
+  let total = 0;
   for (const [k, v] of Object.entries(obj)) {
     if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) {
       throw new JevError(
@@ -223,6 +239,13 @@ function validateProbabilities(
         { code: "MALFORMED_RESPONSE", retryable: false }
       );
     }
+    total += v;
+  }
+  if (Math.abs(total - 1) > 0.001) {
+    throw new JevError(
+      `Malformed answer for question '${qName}': probabilities must sum to 1`,
+      { code: "MALFORMED_RESPONSE", retryable: false }
+    );
   }
   return obj as Record<string, number>;
 }
@@ -230,7 +253,7 @@ function validateProbabilities(
 function validateAnswer(
   rawAnswer: unknown,
   qName: string,
-  expectedType?: "noul" | "score" | "choice"
+  expectedQuestion?: JevQuestion
 ): JevAnswer {
   if (!rawAnswer || typeof rawAnswer !== "object" || Array.isArray(rawAnswer)) {
     throw new JevError(
@@ -249,9 +272,9 @@ function validateAnswer(
     );
   }
 
-  if (expectedType !== undefined && ansType !== expectedType) {
+  if (expectedQuestion !== undefined && ansType !== expectedQuestion.type) {
     throw new JevError(
-      `Malformed answer for question '${qName}': answer type '${ansType}' does not match question type '${expectedType}'`,
+      `Malformed answer for question '${qName}': answer type '${ansType}' does not match question type '${expectedQuestion.type}'`,
       { code: "MALFORMED_RESPONSE", retryable: false }
     );
   }
@@ -281,7 +304,17 @@ function validateAnswer(
         { code: "MALFORMED_RESPONSE", retryable: false }
       );
     }
-    const probs = validateProbabilities(ans.probabilities, qName);
+    const expectedKeys =
+      expectedQuestion?.type === "choice"
+        ? Object.keys(expectedQuestion.criteria)
+        : Object.keys((ans.probabilities as Record<string, unknown>) ?? {});
+    if (!expectedKeys.includes(ans.choice)) {
+      throw new JevError(
+        `Malformed answer for question '${qName}': choice must match declared criteria`,
+        { code: "MALFORMED_RESPONSE", retryable: false }
+      );
+    }
+    const probs = validateProbabilities(ans.probabilities, qName, expectedKeys);
     if (
       typeof ans.confidence !== "number" ||
       !Number.isFinite(ans.confidence) ||
@@ -323,7 +356,23 @@ function validateAnswer(
         );
       }
     }
-    const probs = validateProbabilities(ans.probabilities, qName);
+    const expectedCriteria =
+      expectedQuestion?.type === "score"
+        ? expectedQuestion.criteria
+        : Object.values(legendObj);
+    const expectedKeys = expectedCriteria.map((_, index) => String(index));
+    if (
+      ans.score < 0 ||
+      ans.score > expectedCriteria.length - 1 ||
+      Object.keys(legendObj).length !== expectedKeys.length ||
+      expectedKeys.some((key, index) => legendObj[key] !== expectedCriteria[index])
+    ) {
+      throw new JevError(
+        `Malformed answer for question '${qName}': score legend must match declared criteria`,
+        { code: "MALFORMED_RESPONSE", retryable: false }
+      );
+    }
+    const probs = validateProbabilities(ans.probabilities, qName, expectedKeys);
     if (
       typeof ans.confidence !== "number" ||
       !Number.isFinite(ans.confidence) ||
@@ -384,12 +433,19 @@ export function validateJevResponse(
           { code: "MALFORMED_RESPONSE", retryable: false }
         );
       }
-      validatedAnswers[qName] = validateAnswer(answersObj[qName], qName, qDef.type);
+      validatedAnswers[qName] = validateAnswer(answersObj[qName], qName, qDef);
     }
   } else {
     for (const [qName, rawAns] of Object.entries(answersObj)) {
       validatedAnswers[qName] = validateAnswer(rawAns, qName);
     }
+  }
+
+  if (typeof rawObj.model !== "string" || rawObj.model.trim().length === 0) {
+    throw new JevError("Malformed response: model must be a non-empty string", {
+      code: "MALFORMED_RESPONSE",
+      retryable: false,
+    });
   }
 
   let validatedUsage: JevUsage | undefined;
@@ -417,6 +473,11 @@ export function validateJevResponse(
       output_tokens: u.output_tokens,
       ...u,
     };
+  } else {
+    throw new JevError("Malformed response: missing usage object", {
+      code: "MALFORMED_RESPONSE",
+      retryable: false,
+    });
   }
 
   const result: JevResponse = {

@@ -16,6 +16,42 @@ import {
   type JevResponse,
 } from "../src/client.ts";
 
+function wireResponse(response: JevResponse): JevResponse {
+  const impact = response.answers.impact;
+  if (impact?.type !== "score") {
+    return {
+      model: "jev-test",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      ...response,
+    };
+  }
+
+  const selected = String(Math.max(0, Math.min(3, Math.round(impact.score))));
+  return {
+    model: "jev-test",
+    usage: { input_tokens: 1, output_tokens: 1 },
+    ...response,
+    answers: {
+      ...response.answers,
+      impact: {
+        ...impact,
+        legend: {
+          "0": "None, it only reads",
+          "1": "Small, one file or one reversible change",
+          "2": "Large, many files or shared state",
+          "3": "Severe, data loss or a forced overwrite of shared history",
+        },
+        probabilities: {
+          "0": selected === "0" ? 1 : 0,
+          "1": selected === "1" ? 1 : 0,
+          "2": selected === "2" ? 1 : 0,
+          "3": selected === "3" ? 1 : 0,
+        },
+      },
+    },
+  };
+}
+
 describe("PreToolUse and UserPromptSubmit hooks", () => {
   test("hook timeout covers the default client retry budget", () => {
     const hooks = JSON.parse(
@@ -104,7 +140,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const output = await runPreTool(
@@ -144,7 +180,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const output = await runPreTool(
@@ -193,7 +229,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const output = await runPreTool(
@@ -252,7 +288,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const longContent = "A".repeat(500);
@@ -304,7 +340,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const longOldString = "X".repeat(450);
@@ -362,7 +398,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const windowsPath = "C:\\Users\\runner\\project\\src\\app.ts";
@@ -412,7 +448,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const output = await runPreTool(
@@ -448,7 +484,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     await runPreTool(
@@ -487,7 +523,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const output = await runPreTool(
@@ -534,7 +570,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
     };
 
     const mockFetch = async () => {
-      return new Response(JSON.stringify(veryConfidentSafeResponse), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(veryConfidentSafeResponse)), { status: 200 });
     };
 
     const output = await runPreTool(
@@ -586,7 +622,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const output = await runPreTool(
@@ -649,7 +685,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     // permission_mode: "headless"
@@ -708,7 +744,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     const output = await runPreTool(
@@ -850,7 +886,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
           },
         },
       };
-      return new Response(JSON.stringify(resp), { status: 200 });
+      return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
     await runPreTool(
