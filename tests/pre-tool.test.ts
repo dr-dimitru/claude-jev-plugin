@@ -21,7 +21,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
     const hooks = JSON.parse(
       fs.readFileSync(path.resolve(import.meta.dirname, "../hooks/hooks.json"), "utf8"),
     ) as { hooks: Record<string, Array<{ hooks: Array<{ timeout?: number }> }>> };
-    const minimumSeconds = Math.ceil(DEFAULT_TIMEOUT_MS / 1000) * (DEFAULT_RETRIES + 1);
+    const minimumSeconds = Math.ceil(DEFAULT_TIMEOUT_MS / 1000) + 3;
     for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) {
       const timeout = hooks.hooks[event]?.[0]?.hooks[0]?.timeout ?? 0;
       assert.ok(

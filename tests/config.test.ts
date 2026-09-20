@@ -35,7 +35,7 @@ describe("config loading", () => {
     assert.equal(config.model, "jev-latest");
     assert.equal(config.maxStateChars, 8000);
     assert.equal(config.endpoint, "https://api.typesafe.ai/v1/systemone");
-    assert.equal(config.timeoutMs, 20000);
+    assert.equal(config.timeoutMs, 15000);
     assert.equal(config.retries, 2);
     assert.equal(config.apiKey, undefined);
 
@@ -293,7 +293,7 @@ describe("config loading", () => {
     });
 
     // Invalid fields are rejected, valid defaults kept
-    assert.equal(config.timeoutMs, 20000);
+    assert.equal(config.timeoutMs, 15000);
     assert.equal(config.maxStateChars, 8000);
     assert.equal(config.gate.mode, "shadow");
     assert.equal(config.gate.argumentChars, 400);

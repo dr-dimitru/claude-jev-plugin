@@ -11,6 +11,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_RETRIES,
+  parseRetryAfter,
   type JevCall,
   type JevQuestion,
   type JevResponse,
@@ -37,7 +38,7 @@ describe("TypeSafe Jev Client", () => {
     it("exports default constants", () => {
       assert.equal(DEFAULT_MODEL, "jev-latest");
       assert.equal(DEFAULT_ENDPOINT, "https://api.typesafe.ai/v1/systemone");
-      assert.equal(DEFAULT_TIMEOUT_MS, 20000);
+      assert.equal(DEFAULT_TIMEOUT_MS, 15000);
       assert.equal(DEFAULT_RETRIES, 2);
     });
   });
@@ -382,7 +383,105 @@ describe("TypeSafe Jev Client", () => {
   });
 
   describe("Timeout and caller abort behavior", () => {
-    it("times out per attempt and retries up to retry limit", async () => {
+    it("applies timeout to response body reads", async () => {
+      const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => ({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers(),
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("aborted");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true }
+            );
+            setTimeout(() => reject(new Error("body still pending after deadline")), 100);
+          }),
+      })) as unknown as typeof fetch;
+
+      await assert.rejects(
+        askJev({
+          apiKey: "test-key",
+          timeoutMs: 40,
+          retries: 0,
+          state: {},
+          questions: { q: { type: "noul", instructions: "Is it true?" } },
+          fetch: fetchFn,
+        }),
+        (error: unknown) => error instanceof JevError && error.code === "TIMEOUT"
+      );
+    });
+
+    it("uses one total timeout across all retry attempts", async () => {
+      let callCount = 0;
+      const started = Date.now();
+      const fetchFn: typeof fetch = async (_input, init) => {
+        callCount++;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              const error = new Error("aborted");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true }
+          );
+        });
+      };
+
+      await assert.rejects(
+        askJev({
+          apiKey: "test-key",
+          timeoutMs: 60,
+          retries: 2,
+          retryDelayMs: 0,
+          state: {},
+          questions: { q: { type: "noul", instructions: "Is it true?" } },
+          fetch: fetchFn,
+        }),
+        (error: unknown) => error instanceof JevError && error.code === "TIMEOUT"
+      );
+
+      assert.ok(Date.now() - started < 130);
+      assert.ok(callCount <= 2);
+    });
+
+    it("does not retry when Retry-After exceeds the remaining deadline", async () => {
+      let callCount = 0;
+      await assert.rejects(
+        askJev({
+          apiKey: "test-key",
+          timeoutMs: 60,
+          retries: 2,
+          state: {},
+          questions: { q: { type: "noul", instructions: "Is it true?" } },
+          fetch: async () => {
+            callCount++;
+            return new Response("busy", {
+              status: 429,
+              headers: { "Retry-After": "1" },
+            });
+          },
+        }),
+        (error: unknown) => error instanceof JevError && error.code === "TIMEOUT"
+      );
+      assert.equal(callCount, 1);
+    });
+
+    it("parses Retry-After seconds and HTTP dates", () => {
+      const now = Date.parse("2026-09-20T12:00:00.000Z");
+      assert.equal(parseRetryAfter("2", now), 2000);
+      assert.equal(parseRetryAfter("Sun, 20 Sep 2026 12:00:03 GMT", now), 3000);
+      assert.equal(parseRetryAfter("invalid", now), undefined);
+    });
+
+    it("times out within the total budget and retries up to the retry limit", async () => {
       let callCount = 0;
       const mockFetch: typeof fetch = async (_input, init) => {
         callCount++;
@@ -416,7 +515,7 @@ describe("TypeSafe Jev Client", () => {
         }
       );
 
-      assert.equal(callCount, 2); // 1 initial attempt + 1 retry
+      assert.ok(callCount >= 1 && callCount <= 2);
     });
 
     it("aborts immediately without retrying when caller abort signal fires", async () => {

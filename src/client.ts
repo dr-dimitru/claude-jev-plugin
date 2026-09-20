@@ -7,7 +7,7 @@
 
 export const DEFAULT_MODEL = "jev-latest";
 export const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
-export const DEFAULT_TIMEOUT_MS = 20000;
+export const DEFAULT_TIMEOUT_MS = 15000;
 export const DEFAULT_RETRIES = 2;
 
 // --- Registered API Keys & Redaction ---
@@ -429,32 +429,36 @@ export function validateJevResponse(
   return result;
 }
 
+export function parseRetryAfter(
+  value: string | null | undefined,
+  now: number = Date.now()
+): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+  const date = Date.parse(value);
+  if (!Number.isFinite(date)) return undefined;
+  return Math.max(0, date - now);
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      reject(signal?.reason ?? new Error("Aborted"));
+    };
     if (signal?.aborted) {
-      return reject(
-        new JevError("Request aborted by caller", {
-          code: "ABORTED",
-          retryable: false,
-          cause: signal.reason,
-        })
-      );
+      onAbort();
+      return;
     }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(
-          new JevError("Request aborted by caller", {
-            code: "ABORTED",
-            retryable: false,
-            cause: signal.reason,
-          })
-        );
-      },
-      { once: true }
-    );
+    timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -464,16 +468,12 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Directly posts a request to TypeSafe System One and returns the validated response.
  */
 export async function askJev(call: JevCall): Promise<JevResponse> {
-  if (call.apiKey) {
-    registerApiKey(call.apiKey);
-  }
+  if (call.apiKey) registerApiKey(call.apiKey);
   const envKey = process.env.TYPESAFE_API_KEY?.trim();
-  if (envKey) {
-    registerApiKey(envKey);
-  }
+  if (envKey) registerApiKey(envKey);
 
-  const apiKey = (call.apiKey?.trim() || envKey);
-  if (!apiKey || apiKey.length === 0) {
+  const apiKey = call.apiKey?.trim() || envKey;
+  if (!apiKey) {
     throw new JevError(
       "Missing TypeSafe API key. Set TYPESAFE_API_KEY or provide apiKey in JevCall.",
       { code: "MISSING_KEY", retryable: false }
@@ -485,13 +485,25 @@ export async function askJev(call: JevCall): Promise<JevResponse> {
   const timeoutMs = call.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const retries = call.retries ?? DEFAULT_RETRIES;
   const fetchFn = call.fetch ?? fetch;
+  const deadline = Date.now() + timeoutMs;
+  const controller = new AbortController();
+  let timedOut = false;
 
-  if (call.signal?.aborted) {
-    throw new JevError("Request aborted by caller", {
-      code: "ABORTED",
-      retryable: false,
-      cause: call.signal.reason,
-    });
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error("Timeout"));
+  }, timeoutMs);
+  const onCallerAbort = () => controller.abort(call.signal?.reason);
+  if (call.signal) {
+    if (call.signal.aborted) {
+      clearTimeout(timeoutId);
+      throw new JevError("Request aborted by caller", {
+        code: "ABORTED",
+        retryable: false,
+        cause: call.signal.reason,
+      });
+    }
+    call.signal.addEventListener("abort", onCallerAbort, { once: true });
   }
 
   const requestBody = JSON.stringify({
@@ -500,137 +512,116 @@ export async function askJev(call: JevCall): Promise<JevResponse> {
     questions: call.questions,
   });
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  const abortError = (): JevError => {
     if (call.signal?.aborted) {
-      throw new JevError("Request aborted by caller", {
+      return new JevError("Request aborted by caller", {
         code: "ABORTED",
         retryable: false,
         cause: call.signal.reason,
       });
     }
+    return new JevError(`Request timed out after ${timeoutMs}ms`, {
+      code: "TIMEOUT",
+      retryable: true,
+      cause: controller.signal.reason,
+    });
+  };
 
-    const attemptController = new AbortController();
-    let timedOut = false;
+  const retryDelay = (attempt: number, response?: Response): number => {
+    const headerDelay = parseRetryAfter(response?.headers?.get("Retry-After"));
+    if (headerDelay !== undefined) return headerDelay;
+    if (call.retryDelayMs !== undefined) return call.retryDelayMs;
+    const base = Math.min(2000, 250 * 2 ** attempt);
+    return Math.round(base * (0.75 + Math.random() * 0.5));
+  };
 
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      attemptController.abort(new Error("Timeout"));
-    }, timeoutMs);
-
-    const onCallerAbort = () => {
-      attemptController.abort(call.signal?.reason);
-    };
-
-    if (call.signal) {
-      call.signal.addEventListener("abort", onCallerAbort, { once: true });
-    }
-
-    try {
-      const res = await fetchFn(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
-        body: requestBody,
-        signal: attemptController.signal,
-      });
-
-      clearTimeout(timeoutId);
-      if (call.signal) {
-        call.signal.removeEventListener("abort", onCallerAbort);
+  try {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (controller.signal.aborted || Date.now() >= deadline) {
+        throw abortError();
       }
 
-      if (res.ok) {
-        let json: unknown;
-        try {
-          json = await res.json();
-        } catch (parseErr) {
-          throw new JevError(
-            `Malformed JSON response from TypeSafe API: ${(parseErr as Error).message}`,
-            {
-              code: "MALFORMED_JSON",
-              retryable: false,
-              cause: parseErr,
-            }
-          );
+      try {
+        const res = await fetchFn(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`,
+          },
+          body: requestBody,
+          signal: controller.signal,
+        });
+
+        if (res.ok) {
+          let json: unknown;
+          try {
+            json = await res.json();
+          } catch (parseErr) {
+            if (controller.signal.aborted) throw abortError();
+            throw new JevError(
+              `Malformed JSON response from TypeSafe API: ${(parseErr as Error).message}`,
+              { code: "MALFORMED_JSON", retryable: false, cause: parseErr }
+            );
+          }
+          return validateJevResponse(json, call.questions);
         }
-        return validateJevResponse(json, call.questions);
-      }
 
-      const status = res.status;
-      const retryable = isRetryableStatus(status);
-      const rawBody = await res.text().catch(() => "");
-      const boundedBody = redact(boundText(rawBody, 500));
+        const status = res.status;
+        const retryable = isRetryableStatus(status);
+        const rawBody = await res.text().catch((error) => {
+          if (controller.signal.aborted) throw abortError();
+          throw error;
+        });
+        const boundedBody = redact(boundText(rawBody, 500));
 
-      if (retryable && attempt < retries) {
-        const delay = call.retryDelayMs ?? (attempt === 0 ? 50 : 100);
-        if (delay > 0) {
-          await sleep(delay, call.signal);
+        if (retryable && attempt < retries) {
+          const delay = retryDelay(attempt, res);
+          const remaining = deadline - Date.now();
+          if (delay >= remaining) {
+            await sleep(Math.max(0, remaining), controller.signal);
+            throw abortError();
+          }
+          if (delay > 0) await sleep(delay, controller.signal);
+          continue;
         }
-        continue;
-      }
 
-      throw new JevError(
-        `TypeSafe API error (HTTP ${status}): ${boundedBody || res.statusText || "Unknown error"}`,
-        {
-          status,
-          retryable,
-          code: `HTTP_${status}`,
+        throw new JevError(
+          `TypeSafe API error (HTTP ${status}): ${boundedBody || res.statusText || "Unknown error"}`,
+          { status, retryable, code: `HTTP_${status}` }
+        );
+      } catch (err: unknown) {
+        if (controller.signal.aborted || timedOut || Date.now() >= deadline) {
+          throw abortError();
         }
-      );
-    } catch (err: unknown) {
-      clearTimeout(timeoutId);
-      if (call.signal) {
-        call.signal.removeEventListener("abort", onCallerAbort);
-      }
+        if (err instanceof JevError) throw err;
 
-      if (call.signal?.aborted) {
-        throw new JevError("Request aborted by caller", {
-          code: "ABORTED",
-          retryable: false,
-          cause: call.signal.reason,
+        const name = (err as Error)?.name;
+        const isNetwork = name === "AbortError" || name === "TimeoutError" || name === "TypeError";
+        if (isNetwork && attempt < retries) {
+          const delay = retryDelay(attempt);
+          const remaining = deadline - Date.now();
+          if (delay >= remaining) {
+            await sleep(Math.max(0, remaining), controller.signal);
+            throw abortError();
+          }
+          if (delay > 0) await sleep(delay, controller.signal);
+          continue;
+        }
+
+        throw new JevError(`Network error: ${(err as Error).message}`, {
+          code: "NETWORK_ERROR",
+          retryable: true,
+          cause: err,
         });
       }
-
-      if (err instanceof JevError) {
-        throw err;
-      }
-
-      const isTimeout =
-        timedOut ||
-        (attemptController.signal.aborted &&
-          attemptController.signal.reason?.message === "Timeout") ||
-        (err as Error)?.name === "TimeoutError";
-
-      const isNetworkOrTimeout =
-        isTimeout ||
-        (err as Error)?.name === "AbortError" ||
-        (err as Error)?.name === "TypeError";
-
-      if (isNetworkOrTimeout && attempt < retries) {
-        const delay = call.retryDelayMs ?? (attempt === 0 ? 50 : 100);
-        if (delay > 0) {
-          await sleep(delay, call.signal);
-        }
-        continue;
-      }
-
-      const code = isTimeout ? "TIMEOUT" : "NETWORK_ERROR";
-      const msg = isTimeout
-        ? `Request timed out after ${timeoutMs}ms`
-        : `Network error: ${(err as Error).message}`;
-
-      throw new JevError(msg, {
-        code,
-        retryable: true,
-        cause: err,
-      });
     }
-  }
 
-  throw new JevError("Request failed: maximum retries exhausted", {
-    code: "RETRIES_EXHAUSTED",
-    retryable: true,
-  });
+    throw new JevError("Request failed: maximum retries exhausted", {
+      code: "RETRIES_EXHAUSTED",
+      retryable: true,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+    call.signal?.removeEventListener("abort", onCallerAbort);
+  }
 }

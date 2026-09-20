@@ -20,7 +20,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/dist/hooks/pre-tool.js"],
-            "timeout": 65
+            "timeout": 20
           }
         ]
       }
@@ -33,7 +33,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/dist/hooks/post-tool.js"],
-            "timeout": 65
+            "timeout": 20
           }
         ]
       }
@@ -46,7 +46,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/dist/hooks/post-tool-failure.js"],
-            "timeout": 65
+            "timeout": 20
           }
         ]
       }
