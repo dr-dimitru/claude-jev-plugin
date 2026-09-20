@@ -54,6 +54,13 @@ export interface LoadedConfig {
   output: OutputConfig;
 }
 
+export class ConfigError extends Error {
+  constructor() {
+    super("Invalid configuration file");
+    this.name = "ConfigError";
+  }
+}
+
 export interface ConfigOptions {
   homeDir?: string;
   env?: Record<string, string | undefined>;
@@ -118,16 +125,12 @@ function cloneConfig(c: LoadedConfig): LoadedConfig {
   };
 }
 
-function readJsonFileSync(filePath: string): unknown | null {
+function readJsonFileSync(filePath: string): unknown | undefined {
+  if (!fs.existsSync(filePath)) return undefined;
   try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const content = fs.readFileSync(filePath, "utf-8");
-    return JSON.parse(content);
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
   } catch {
-    // Malformed JSON or read error: safely ignore
-    return null;
+    throw new ConfigError();
   }
 }
 
@@ -142,7 +145,7 @@ function mergeConfigLayer(
   options: MergeLayerOptions
 ): void {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return;
+    throw new ConfigError();
   }
 
   const obj = raw as Record<string, unknown>;
@@ -282,7 +285,7 @@ export function loadConfig(
   if (homeDir) {
     const globalPath = path.join(homeDir, ".claude", "claude-jev.json");
     const globalJson = readJsonFileSync(globalPath);
-    if (globalJson) {
+    if (globalJson !== undefined) {
       mergeConfigLayer(config, globalJson, {
         allowTransport: true,
         allowSecretSources: true,
@@ -294,7 +297,7 @@ export function loadConfig(
   if (cwd) {
     const projectPath = path.join(cwd, ".claude", "claude-jev.json");
     const projectJson = readJsonFileSync(projectPath);
-    if (projectJson) {
+    if (projectJson !== undefined) {
       mergeConfigLayer(config, projectJson, {
         allowTransport: false,
         allowSecretSources: false,

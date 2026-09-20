@@ -38,6 +38,9 @@ export interface LoadedConfig {
     gate: GateConfig;
     output: OutputConfig;
 }
+export declare class ConfigError extends Error {
+    constructor();
+}
 export interface ConfigOptions {
     homeDir?: string;
     env?: Record<string, string | undefined>;

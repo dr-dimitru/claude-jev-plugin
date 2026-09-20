@@ -157,6 +157,21 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
       await sessionStore({ sessionId: "prompt-no-key", scratchpadDir: tempDir }).read(),
       null
     );
+
+    process.env.TYPESAFE_API_KEY = "test-typesafe-key";
+    const disabledStore = sessionStore({
+      sessionId: "prompt-session-disabled",
+      scratchpadDir: tempDir,
+    });
+    await disabledStore.setOverrides({ enabled: false });
+    await runUserPrompt({
+      session_id: "prompt-session-disabled",
+      cwd: tempDir,
+      scratchpad_dir: tempDir,
+      hook_event_name: "UserPromptSubmit",
+      prompt: "must respect session disable",
+    });
+    assert.equal(await disabledStore.getPrompt(), undefined);
   });
 
   test("prompt capture stores the first 1200 Unicode code points", async () => {

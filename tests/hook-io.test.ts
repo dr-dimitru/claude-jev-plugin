@@ -170,6 +170,26 @@ describe("hook-io", () => {
       assert.equal(prompt, Array.from(longPrompt).slice(0, 1200).join(""));
     });
 
+    it("does not steal a stale-looking session lock from a live process", async () => {
+      const store = sessionStore({
+        sessionId: "live-lock-owner",
+        scratchpadDir,
+        lockTimeoutMs: 50,
+        staleLockMs: 10,
+        pollIntervalMs: 5,
+      });
+      const lockPath = `${store.getSessionPath()}.lock`;
+      fs.writeFileSync(
+        lockPath,
+        JSON.stringify({ ownerToken: "live", pid: process.pid, createdAt: Date.now() - 10_000 })
+      );
+      const old = new Date(Date.now() - 10_000);
+      fs.utimesSync(lockPath, old, old);
+
+      await assert.rejects(store.setPrompt("blocked"), /lock timeout/i);
+      assert.equal(fs.existsSync(lockPath), true);
+    });
+
     it("preserves fields across concurrent session updates", async () => {
       for (let attempt = 0; attempt < 10; attempt++) {
         const store = sessionStore({

@@ -227,7 +227,7 @@ describe("config loading", () => {
     assert.equal(config.apiKey, undefined);
   });
 
-  it("safely ignores malformed JSON files without crashing", () => {
+  it("rejects malformed JSON instead of silently enabling defaults", () => {
     const projectClaudeDir = path.join(projectDir, ".claude");
     fs.mkdirSync(projectClaudeDir, { recursive: true });
     fs.writeFileSync(
@@ -236,18 +236,13 @@ describe("config loading", () => {
       "utf-8"
     );
 
-    const config = loadConfig(projectDir, {
-      homeDir: fakeHomeDir,
-      env: {},
-    });
-
-    // Defaults should be retained safely
-    assert.equal(config.model, "jev-latest");
-    assert.equal(config.maxStateChars, 8000);
-    assert.equal(config.gate.mode, "shadow");
+    assert.throws(
+      () => loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }),
+      /invalid configuration/i
+    );
   });
 
-  it("safely handles non-object JSON (arrays, primitives)", () => {
+  it("rejects non-object JSON configuration", () => {
     const projectClaudeDir = path.join(projectDir, ".claude");
     fs.mkdirSync(projectClaudeDir, { recursive: true });
     fs.writeFileSync(
@@ -256,12 +251,10 @@ describe("config loading", () => {
       "utf-8"
     );
 
-    const config = loadConfig(projectDir, {
-      homeDir: fakeHomeDir,
-      env: {},
-    });
-
-    assert.equal(config.model, "jev-latest");
+    assert.throws(
+      () => loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }),
+      /invalid configuration/i
+    );
   });
 
   it("safely validates and rejects invalid field types, preserving defaults", () => {

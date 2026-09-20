@@ -38,6 +38,9 @@ export interface SessionStoreOptions {
     homeDir?: string;
     env?: Record<string, string | undefined>;
     maxRecordBytes?: number;
+    lockTimeoutMs?: number;
+    staleLockMs?: number;
+    pollIntervalMs?: number;
 }
 export interface SessionStore {
     getSessionPath(): string;

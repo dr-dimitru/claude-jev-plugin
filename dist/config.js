@@ -8,6 +8,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { DEFAULT_MODEL, DEFAULT_ENDPOINT, DEFAULT_TIMEOUT_MS, DEFAULT_RETRIES, registerApiKey, } from "./client.js";
+export class ConfigError extends Error {
+    constructor() {
+        super("Invalid configuration file");
+        this.name = "ConfigError";
+    }
+}
 export const DEFAULT_CONFIG = {
     model: DEFAULT_MODEL,
     maxStateChars: 8000,
@@ -66,21 +72,18 @@ function cloneConfig(c) {
     };
 }
 function readJsonFileSync(filePath) {
+    if (!fs.existsSync(filePath))
+        return undefined;
     try {
-        if (!fs.existsSync(filePath)) {
-            return null;
-        }
-        const content = fs.readFileSync(filePath, "utf-8");
-        return JSON.parse(content);
+        return JSON.parse(fs.readFileSync(filePath, "utf-8"));
     }
     catch {
-        // Malformed JSON or read error: safely ignore
-        return null;
+        throw new ConfigError();
     }
 }
 function mergeConfigLayer(target, raw, options) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        return;
+        throw new ConfigError();
     }
     const obj = raw;
     if (options.allowTransport &&
@@ -183,7 +186,7 @@ export function loadConfig(cwd = process.cwd(), options) {
     if (homeDir) {
         const globalPath = path.join(homeDir, ".claude", "claude-jev.json");
         const globalJson = readJsonFileSync(globalPath);
-        if (globalJson) {
+        if (globalJson !== undefined) {
             mergeConfigLayer(config, globalJson, {
                 allowTransport: true,
                 allowSecretSources: true,
@@ -194,7 +197,7 @@ export function loadConfig(cwd = process.cwd(), options) {
     if (cwd) {
         const projectPath = path.join(cwd, ".claude", "claude-jev.json");
         const projectJson = readJsonFileSync(projectPath);
-        if (projectJson) {
+        if (projectJson !== undefined) {
             mergeConfigLayer(config, projectJson, {
                 allowTransport: false,
                 allowSecretSources: false,

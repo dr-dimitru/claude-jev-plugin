@@ -27,13 +27,14 @@ export async function runUserPrompt(payload) {
             eventName === "UserPromptSubmit" &&
             prompt !== undefined) {
             const config = loadConfig(cwd);
-            if (!config.gate.enabled || !config.apiKey)
-                return;
             const store = sessionStore({
                 sessionId,
                 agentId,
                 scratchpadDir,
             });
+            const overrides = await store.getOverrides();
+            if (!(overrides.enabled ?? config.gate.enabled) || !config.apiKey)
+                return;
             await store.setPrompt(prompt);
         }
     }

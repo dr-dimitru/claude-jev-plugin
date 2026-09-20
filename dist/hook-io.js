@@ -84,6 +84,9 @@ export function sessionStore(options) {
     const { sessionId, agentId, scratchpadDir, homeDir } = options;
     const env = options.env ?? process.env;
     const maxRecordBytes = options.maxRecordBytes ?? DEFAULT_MAX_SESSION_RECORD_BYTES;
+    const lockTimeoutMs = options.lockTimeoutMs ?? 2000;
+    const staleLockMs = options.staleLockMs ?? 5000;
+    const pollIntervalMs = options.pollIntervalMs ?? 10;
     // Determine safe base directory
     let baseDir;
     if (scratchpadDir && scratchpadDir.trim().length > 0) {
@@ -172,6 +175,17 @@ export function sessionStore(options) {
             throw err;
         }
     }
+    function isProcessAlive(pid) {
+        if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0)
+            return false;
+        try {
+            process.kill(pid, 0);
+            return true;
+        }
+        catch (error) {
+            return error?.code === "EPERM";
+        }
+    }
     async function withMutationLock(operation) {
         ensureDir();
         const startedAt = Date.now();
@@ -192,18 +206,37 @@ export function sessionStore(options) {
                     throw error;
                 try {
                     const stat = await fs.promises.stat(lockPath);
-                    if (Date.now() - stat.mtimeMs > 5000) {
-                        await fs.promises.unlink(lockPath).catch(() => { });
-                        continue;
+                    if (Date.now() - stat.mtimeMs > staleLockMs) {
+                        let metadata = {};
+                        try {
+                            metadata = JSON.parse(await fs.promises.readFile(lockPath, "utf-8"));
+                        }
+                        catch {
+                            // Unparseable stale lock has no live owner evidence.
+                        }
+                        if (!isProcessAlive(metadata.pid)) {
+                            const current = await fs.promises.readFile(lockPath, "utf-8").catch(() => "");
+                            let currentToken;
+                            try {
+                                currentToken = JSON.parse(current)?.ownerToken;
+                            }
+                            catch {
+                                currentToken = undefined;
+                            }
+                            if (currentToken === metadata.ownerToken) {
+                                await fs.promises.unlink(lockPath).catch(() => { });
+                                continue;
+                            }
+                        }
                     }
                 }
                 catch {
                     continue;
                 }
-                if (Date.now() - startedAt >= 2000) {
+                if (Date.now() - startedAt >= lockTimeoutMs) {
                     throw new Error("Session state lock timeout");
                 }
-                await new Promise(resolve => setTimeout(resolve, 10));
+                await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
             }
         }
         try {

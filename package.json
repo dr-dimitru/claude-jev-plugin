@@ -21,7 +21,7 @@
     "build": "tsc",
     "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --noEmit",
-    "check": "npm test && npm run typecheck && npm run build",
+    "check": "npm run typecheck && npm run build && npm test",
     "validate:plugin": "claude plugin validate . --strict"
   },
   "license": "BSD-3-Clause",

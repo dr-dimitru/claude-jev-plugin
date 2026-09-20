@@ -101,6 +101,10 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       assert.equal(plugin.license, "BSD-3-Clause");
       assert.ok(Array.isArray(pkg.files));
       assert.ok(pkg.devDependencies.typescript);
+      assert.ok(
+        pkg.scripts.check.indexOf("build") < pkg.scripts.check.indexOf("test"),
+        "check must build committed runtime before CLI tests execute"
+      );
     });
   });
 
