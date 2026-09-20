@@ -1,5 +1,9 @@
 {
   "name": "claude-jev",
   "version": "0.1.0",
-  "description": "Semantic guardrails and output verification for Claude Code powered by TypeSafe Jev"
+  "description": "Semantic guardrails and output verification for Claude Code powered by TypeSafe Jev",
+  "author": {
+    "name": "dr.dimitru",
+    "url": "https://github.com/dr-dimitru"
+  }
 }
