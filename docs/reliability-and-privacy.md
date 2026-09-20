@@ -17,6 +17,23 @@ flowchart TD
     W --> R[Reuse verdict]
 ```
 
+**ASCII version**
+
+```text
+Hook process A ----+
+                   +--> [Exact judgment key] --> [Lock available?]
+Hook process B ----+                              |           |
+                                                  | yes       | no
+                                                  v           v
+                                      [One TypeSafe call] [Wait + poll cache]
+                                                  |
+                                                  v
+                                      [Atomic verdict write]
+                                                  |
+                                                  +---------> [Reuse verdict]
+```
+
+
 Cache key includes exact bounded state, current directory, model, question definitions, thresholds, and payload bounds. Cache directory includes hash of session ID and optional agent ID, isolating subagents.
 
 Gate cache TTL defaults to 120 seconds. Output TTL is 120 seconds.
@@ -35,6 +52,19 @@ gantt
     Retry attempt         :c, after b, 7000
     Safety margin         :d, after c, 2000
 ```
+
+**ASCII version**
+
+```text
+0 ms                                                           15,000 ms
+|-----------------------------------------------------------------------|
+| Initial request | retry delay | retry attempt | safety margin          |
+|-----------------------------------------------------------------------|
+
+The 15-second budget covers every request attempt, body read, parse,
+and retry delay. Claude's hook timeout is 20 seconds.
+```
+
 
 | Layer | Limit |
 | --- | ---: |
@@ -62,6 +92,32 @@ flowchart TD
     E -->|yes| F[Shadow warning or enforce ask]
 ```
 
+**ASCII version**
+
+```text
+[Hook event]
+     |
+     v
+[API key?] -- no -------------------------------> [No decision / fail open]
+     |
+    yes
+     v
+[Request succeeds?] -- no ----------------------> [No decision / fail open]
+     |
+    yes
+     v
+[Response valid?] -- no ------------------------> [No decision / fail open]
+     |
+    yes
+     v
+[Threshold crossed?] -- no ---------------------> [Silent clear verdict]
+     |
+    yes
+     v
+[Shadow warning or enforce ask]
+```
+
+
 No judgment is returned for missing key, malformed config, invalid endpoint, timeout, network failure, retry exhaustion, malformed TypeSafe response, cache timeout, state failure, or Claude hook timeout.
 
 Infrastructure failure is never cached as clear. Diagnostics use fixed local text and exclude malformed input, parser errors, API bodies, prompts, command output, and credentials.
@@ -77,6 +133,23 @@ flowchart LR
     J --> V[Tools, modes, bounds, thresholds]
     P -. blocked .-> S[Secrets and endpoint]
 ```
+
+**ASCII version**
+
+```text
+[TYPESAFE_API_KEY] ----+
+                           +--> [Trusted transport] --> [TypeSafe client]
+[Global user config] ------+
+
+[Project config] ------------> [Judgment behavior]
+                                  |
+                                  v
+                         tools / modes / bounds /
+                         cache / thresholds
+
+[Project config] -X-> API key / key file / endpoint / retries
+```
+
 
 Global `~/.claude/claude-jev.json` may set model, HTTPS endpoint, total timeout, retries, and API-key file. Environment key has highest secret precedence.
 
@@ -108,6 +181,25 @@ flowchart TD
     B -->|yes| P[CLAUDE_PLUGIN_DATA/sessions]
     B -->|no| F[~/.cache/claude-jev]
 ```
+
+**ASCII version**
+
+```text
+[scratchpad_dir available?]
+          | yes
+          +--------------------> [Claude session scratchpad]
+          |
+         no
+          v
+[CLAUDE_PLUGIN_DATA set?]
+          | yes
+          +--------------------> [CLAUDE_PLUGIN_DATA/sessions]
+          |
+         no
+          v
+[~/.cache/claude-jev]
+```
+
 
 State contains bounded prompt, session overrides, latest verdict summaries, seen tool IDs, and diagnostic timestamps. Session filenames hash session and optional agent identities. Files use restrictive permissions and locked atomic updates.
 

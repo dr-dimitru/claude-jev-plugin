@@ -10,6 +10,18 @@ flowchart LR
     O --> F[failure_class<br/>Choice]
 ```
 
+**ASCII version**
+
+```text
+                 [Bounded Bash result]
+                          |
+                +---------+---------+
+                |                   |
+                v                   v
+      [leaks_secret / Noul] [failure_class / Choice]
+```
+
+
 `leaks_secret` uses threshold `0.90`. `failure_class` produces advice only at confidence `0.60` or above.
 
 Choice categories:
@@ -51,6 +63,23 @@ sequenceDiagram
     end
 ```
 
+**ASCII version**
+
+```text
+Bash            Claude Code        PostToolUse hook          TypeSafe
+ |                       |                    |                      |
+ |-- stdout/stderr ----->|                    |                      |
+ |                       |-- result payload ->|                      |
+ |                       |                    |-- claim tool ID      |
+ |                       |                    |-- bounded result --->|
+ |                       |                    |<-- typed answers ----|
+ |                       |                    |-- validate + compose |
+ |                       |<-- leak: replace --|                      |
+ |                       |<-- advice: context-|                      |
+ |                       |<-- clear: silence -|                      |
+```
+
+
 State sent to TypeSafe:
 
 ```json
@@ -89,6 +118,25 @@ flowchart LR
     D --> E[Claude-visible result replaced]
 ```
 
+**ASCII version**
+
+```text
+[Bash executes]
+       |
+       v
+[Original output exists]
+       |
+       v
+[Telemetry may capture original]
+       |
+       v
+[PostToolUse hook runs]
+       |
+       v
+[Claude-visible output replaced]
+```
+
+
 Replacement cannot undo network transfers, file writes, process effects, or earlier telemetry. Secret detection also requires sending bounded potentially-sensitive output to TypeSafe.
 
 ## Failed Bash output
@@ -125,6 +173,21 @@ sequenceDiagram
         Hook-->>Claude: No output
     end
 ```
+
+**ASCII version**
+
+```text
+Claude Code        PostToolUseFailure hook        TypeSafe
+     |                            |                       |
+     |-- failed Bash payload --->|                       |
+     |                            |-- bounded failure --->|
+     |                            |<-- typed answers -----|
+     |                            |                       |
+     |<-- secret: warning --------|                       |
+     |<-- class: fixed context ---|                       |
+     |<-- clear: no output -------|                       |
+```
+
 
 Failure hook may return `additionalContext`:
 

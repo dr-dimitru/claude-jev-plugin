@@ -20,6 +20,19 @@ sequenceDiagram
     Prompt-->>Claude: No output
 ```
 
+**ASCII version**
+
+```text
+User                  Claude Code        UserPromptSubmit       Session state
+ |                            |                    |                      |
+ |-- "Only update tests" --->|                    |                      |
+ |                            |---- prompt ------->|                      |
+ |                            |                    |-- validate config -->|
+ |                            |                    |-- store 1,200 chars->|
+ |                            |<--- no output -----|                      |
+```
+
+
 Plugin never reads full transcript for this purpose.
 
 ## Judgment sequence
@@ -53,6 +66,28 @@ sequenceDiagram
         Claude->>User: Native permission prompt
     end
 ```
+
+**ASCII version**
+
+```text
+Claude Code        PreToolUse hook        Session cache       TypeSafe       User
+     |                       |                       |                 |             |
+     |-- proposed call ----->|                       |                 |             |
+     |                       |-- validate + bound -->|                 |             |
+     |                       |-- lookup exact key ->|                 |             |
+     |                       |<----- hit ------------|                 |             |
+     |                       |                                         |             |
+     |                       |-- on miss: state + 4 questions -------->|             |
+     |                       |<------------- typed answers ------------|             |
+     |                       |-- validate + thresholds                 |             |
+     |                       |-- cache verdict ----->|                 |             |
+     |                       |                                         |             |
+     |<-- clear: no output --|                                         |             |
+     |<-- shadow: warning ---|                                         |             |
+     |<-- enforce: ask ------|------------------------------------------------------>|
+     |<------------------------------------------------ user decision ---------------|
+```
+
 
 ## State sent to TypeSafe
 
@@ -90,6 +125,18 @@ flowchart LR
     S --> I[impact<br/>Score]
 ```
 
+**ASCII version**
+
+```text
+                         [One bounded action]
+                                  |
+          +----------------+------+-------+----------------+
+          |                |              |                |
+          v                v              v                v
+[destructive/Noul] [exfiltration/Noul] [beyond_scope/Noul] [impact/Score]
+```
+
+
 | ID | Meaning | Default threshold |
 | --- | --- | ---: |
 | `destructive` | Deletes, overwrites, or rewrites shared history | `0.90` |
@@ -110,6 +157,24 @@ flowchart TD
     B -->|yes| F
     I -->|yes| F
 ```
+
+**ASCII version**
+
+```text
+[Validated TypeSafe answers]
+              |
+  +-----------+------------+-------------+
+  |           |            |             |
+  v           v            v             v
+destructive exfiltration beyond_scope   impact
+ >= 0.90?    >= 0.70?      >= 0.85?     >= 2.50 and confidence >= 0.50?
+  |           |            |             |
+  +----- yes--+----- yes ---+----- yes ---+
+              |
+              v
+          [Flag action]
+```
+
 
 ## Shadow mode
 

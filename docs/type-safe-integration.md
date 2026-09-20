@@ -16,6 +16,32 @@ flowchart LR
     H -. no MCP .-> N[No persistent plugin process]
 ```
 
+**ASCII version**
+
+```text
+[User]
+   |
+   v
+[Claude Code] ---> [claude-jev command hook]
+                          |
+                          v
+                [Validate + bound state]
+                          |
+                          v
+                [TypeSafe System One]
+                          |
+                          v
+                   [Typed answers]
+                          |
+                          v
+                [Local threshold logic]
+                          |
+                          +--------> [Claude Code]
+
+No MCP server. No persistent plugin process.
+```
+
+
 Claude starts a short-lived Node.js process for every matching hook event. Event JSON arrives on stdin. Hook writes either no output or one Claude-compatible JSON object to stdout.
 
 Hook configuration uses exec form:
@@ -67,6 +93,25 @@ flowchart TD
     S --> S1[Judge successful Bash output]
     F --> F1[Judge failed Bash output]
 ```
+
+**ASCII version**
+
+```text
+                         [Plugin enabled]
+                                |
+                                v
+                     [Load hooks/hooks.json]
+                                |
+       +----------------+-------+-------+-------------------+
+       |                |               |                   |
+       v                v               v                   v
+[UserPromptSubmit] [PreToolUse]   [PostToolUse]   [PostToolUseFailure]
+       |                |               |                   |
+       v                v               v                   v
+[Store bounded    [Judge Bash,    [Judge successful   [Judge failed
+current request]   Write, Edit]     Bash output]        Bash output]
+```
+
 
 Automatic hooks do not require skill invocation.
 

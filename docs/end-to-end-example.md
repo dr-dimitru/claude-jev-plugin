@@ -54,6 +54,27 @@ sequenceDiagram
     end
 ```
 
+**ASCII version**
+
+```text
+User             Claude Code      Prompt hook      PreToolUse       Cache       TypeSafe
+ |                       |                 |                |              |            |
+ |-- update tests ------>|                 |                |              |            |
+ |                       |-- prompt ------>|                |              |            |
+ |                       |                 |-- store intent |              |            |
+ |                       |                 |                |              |            |
+ |                       |-- curl command ----------------->|              |            |
+ |                       |                                  |-- lookup --->|            |
+ |                       |                                  |<-- miss -----|            |
+ |                       |                                  |-- state + questions ----->|
+ |                       |                                  |<-- typed answers ----------|
+ |                       |                                  |-- validate + thresholds    |
+ |                       |                                  |-- cache ---->|            |
+ |                       |<-- shadow warning OR enforce ask-|              |            |
+ |<---------------- native confirmation if enforce --------|              |            |
+```
+
+
 ## Bounded state
 
 ```json
@@ -107,6 +128,15 @@ flowchart TD
     IT -->|yes| F
 ```
 
+**ASCII version**
+
+```text
+exfiltration 0.98 --------> [>= 0.70?] -- yes --+
+beyond_scope 0.97 -----------> [>= 0.85?] -- yes --+--> [Flagged]
+impact 2.70 / confidence 0.82 -> [>= 2.50 / 0.50?] -+
+```
+
+
 TypeSafe does not approve or block command directly. Plugin produces local verdict because three configured thresholds were crossed.
 
 Shadow output:
@@ -139,6 +169,22 @@ flowchart LR
     B --> C[No ask or deny response]
     C --> D[Claude normal permission flow continues]
 ```
+
+**ASCII version**
+
+```text
+[TypeSafe request fails or times out]
+                  |
+                  v
+         [No validated verdict]
+                  |
+                  v
+          [No ask or deny]
+                  |
+                  v
+ [Claude normal permission flow continues]
+```
+
 
 Failure does not become safe cached answer. Fixed rate-limited diagnostic may be shown, but tool path fails open.
 

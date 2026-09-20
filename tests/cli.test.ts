@@ -558,6 +558,13 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         const content = fs.readFileSync(fullPath, "utf8");
         assert.match(content, /^# /, `${relativePath} needs a title`);
         assert.match(content, /```mermaid/, `${relativePath} needs a Mermaid diagram`);
+        const mermaidCount = (content.match(/```mermaid/g) ?? []).length;
+        const asciiCount = (content.match(/\*\*ASCII version\*\*/g) ?? []).length;
+        assert.equal(
+          asciiCount,
+          mermaidCount,
+          `${relativePath} needs one ASCII companion per Mermaid diagram`
+        );
       }
     });
 
