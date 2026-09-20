@@ -108,6 +108,26 @@ describe("claude-jev CLI", { concurrency: false }, () => {
     });
   });
 
+  describe("hook subprocess privacy", () => {
+    it("uses a generic malformed hook diagnostic without echoing input", () => {
+      const synthetic = "SYNTHETIC_CREDENTIAL_FRAGMENT";
+      const result = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", path.join(REPO_ROOT, "src/hooks/pre-tool.ts")],
+        {
+          cwd: REPO_ROOT,
+          input: synthetic,
+          encoding: "utf8",
+        }
+      );
+
+      assert.equal(result.status, 0);
+      assert.match(result.stdout, /claude-jev: malformed hook payload/i);
+      assert.equal(result.stdout.includes(synthetic), false);
+      assert.doesNotMatch(result.stdout, /unexpected token|invalid json/i);
+    });
+  });
+
   describe("status command", () => {
     it("reports global/project config status and labels session state unknown when --session-id is omitted", () => {
       const res = runCli(["status"], {

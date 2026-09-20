@@ -152,8 +152,8 @@ describe("hook-io", () => {
       const prompt = await store.getPrompt();
       assert.ok(prompt);
       assert.equal(prompt.length, 1200);
-      // Stores the LAST 1200 chars (most recent prompt context)
-      assert.equal(prompt, longPrompt.slice(-1200));
+      // Stores the first 1200 Unicode code points, matching documented payload bounds.
+      assert.equal(prompt, Array.from(longPrompt).slice(0, 1200).join(""));
     });
 
     it("preserves fields across concurrent session updates", async () => {

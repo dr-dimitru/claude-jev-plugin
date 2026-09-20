@@ -378,7 +378,7 @@ describe("PostToolUseFailure Hook", () => {
     });
 
     assert.ok(result);
-    assert.ok(result.systemMessage?.includes("infrastructure error"));
+    assert.ok(result.systemMessage?.includes("hook failed open"));
     assert.strictEqual(result.hookSpecificOutput, undefined);
   });
 

@@ -14,12 +14,13 @@
  */
 
 import { pathToFileURL } from "node:url";
-import { readHookInput, sessionStore, type SessionStore } from "../hook-io.ts";
+import { sessionStore } from "../hook-io.ts";
 import { loadConfig } from "../config.ts";
 import { buildGateState } from "../state.ts";
 import { GATE_QUESTIONS, evaluateGate, judgmentKey, type GateVerdict } from "../gate.ts";
 import { getOrCreateCached } from "../cache.ts";
-import { askJev, redact } from "../client.ts";
+import { askJev } from "../client.ts";
+import { emitDiagnostic, normalizeToolName, readHookPayload, writeHookOutput } from "./common.ts";
 
 export interface HookSpecificOutput {
   hookEventName: "PreToolUse";
@@ -41,10 +42,6 @@ export interface PreToolPayload {
   transcript_path?: string;
   cwd: string;
   permission_mode?: string;
-  prompt_host?: boolean;
-  has_ui?: boolean;
-  has_prompt_host?: boolean;
-  headless?: boolean;
   hook_event_name?: string;
   tool_name?: string;
   tool?: string;
@@ -55,67 +52,13 @@ export interface PreToolPayload {
   [key: string]: unknown;
 }
 
-export function normalizeToolName(raw?: unknown): string | undefined {
-  if (typeof raw !== "string") return undefined;
-  const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
-  if (lower === "bash") return "Bash";
-  if (lower === "write") return "Write";
-  if (lower === "edit") return "Edit";
-  return trimmed;
-}
-
-export function isPromptHostAvailable(payload: Record<string, unknown>): boolean {
-  if (payload.prompt_host === false) return false;
-  if (payload.has_ui === false) return false;
-  if (payload.has_prompt_host === false) return false;
-  if (payload.headless === true) return false;
-  if (typeof payload.permission_mode === "string") {
-    const mode = payload.permission_mode.trim().toLowerCase();
-    if (
-      mode === "headless" ||
-      mode === "dont_ask" ||
-      mode === "dontask" ||
-      mode === "bypass" ||
-      mode === "bypasspermissions" ||
-      mode === "non_interactive"
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-const RATE_LIMIT_WINDOW_MS = 60000;
-let fallbackDiagnosticTime = 0;
-
-async function emitRateLimitedDiagnostic(
-  rawMessage: string,
-  store?: SessionStore | null
-): Promise<PreToolOutput | null> {
-  const now = Date.now();
-
-  if (store) {
-    try {
-      const lastDiag = (await store.getCacheMetadata("last_diagnostic_time")) as number | undefined;
-      if (typeof lastDiag === "number" && now - lastDiag < RATE_LIMIT_WINDOW_MS) {
-        return null;
-      }
-      await store.setCacheMetadata("last_diagnostic_time", now);
-    } catch {
-      // ignore metadata store error
-    }
-  } else {
-    if (now - fallbackDiagnosticTime < RATE_LIMIT_WINDOW_MS) {
-      return null;
-    }
-    fallbackDiagnosticTime = now;
-  }
-
-  const message = redact(rawMessage);
-  return {
-    systemMessage: message,
-  };
+export function isPromptHostAvailable(
+  payload: Record<string, unknown>
+): false | undefined {
+  if (typeof payload.permission_mode !== "string") return undefined;
+  const mode = payload.permission_mode.trim().toLowerCase();
+  if (mode === "dontask" || mode === "bypasspermissions") return false;
+  return undefined;
 }
 
 export async function runPreTool(
@@ -124,21 +67,11 @@ export async function runPreTool(
 ): Promise<PreToolOutput | null> {
   let payload: Record<string, unknown>;
 
-  // 1. Read / validate input payload
+  // 1. Read and validate input without echoing malformed content.
   try {
-    if (rawPayload !== undefined && rawPayload !== null && typeof rawPayload === "object") {
-      payload = rawPayload as Record<string, unknown>;
-    } else if (rawPayload !== undefined) {
-      return await emitRateLimitedDiagnostic("claude-jev: malformed hook payload; expected JSON object", null);
-    } else {
-      payload = await readHookInput(process.stdin);
-    }
-  } catch (err: any) {
-    return await emitRateLimitedDiagnostic(`claude-jev: payload read error: ${err.message}`, null);
-  }
-
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return await emitRateLimitedDiagnostic("claude-jev: malformed hook payload; expected JSON object", null);
+    payload = await readHookPayload(rawPayload);
+  } catch {
+    return await emitDiagnostic<PreToolOutput>("MALFORMED_PAYLOAD", null);
   }
 
   const sessionId = typeof payload.session_id === "string" ? payload.session_id : undefined;
@@ -180,10 +113,7 @@ export async function runPreTool(
 
     // 4. Missing API key check
     if (!config.apiKey || config.apiKey.trim().length === 0) {
-      return await emitRateLimitedDiagnostic(
-        "claude-jev: TYPESAFE_API_KEY is not configured; pre-tool gate skipped",
-        store
-      );
+      return await emitDiagnostic<PreToolOutput>("MISSING_KEY", store);
     }
 
     // 5. Build bounded gate state
@@ -246,7 +176,7 @@ export async function runPreTool(
 
     if (mode === "enforce") {
       const hasHost = isPromptHostAvailable(payload);
-      if (!hasHost) {
+      if (hasHost === false) {
         if (blockWithoutUI) {
           const reason = `claude-jev flagged ${toolName}: ${verdict.summary}`;
           return {
@@ -277,7 +207,7 @@ export async function runPreTool(
     };
   } catch (err: any) {
     // Catch all infrastructure/config/parse errors and fail open with rate-limited diagnostic
-    return await emitRateLimitedDiagnostic(`claude-jev: infrastructure error: ${err.message}`, store);
+    return await emitDiagnostic<PreToolOutput>("REQUEST_FAILED", store);
   }
 }
 
@@ -287,13 +217,9 @@ if (
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
   runPreTool()
-    .then((out) => {
-      if (out) {
-        process.stdout.write(JSON.stringify(out) + "\n");
-      }
-      process.exit(0);
-    })
-    .catch(() => {
-      process.exit(0);
+    .then(writeHookOutput)
+    .catch(() => {})
+    .finally(() => {
+      process.exitCode = 0;
     });
 }

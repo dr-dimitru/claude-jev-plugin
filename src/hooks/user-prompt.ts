@@ -6,7 +6,9 @@
  */
 
 import { pathToFileURL } from "node:url";
-import { readHookInput, sessionStore } from "../hook-io.ts";
+import { sessionStore } from "../hook-io.ts";
+import { readHookPayload } from "./common.ts";
+import { loadConfig } from "../config.ts";
 
 export interface UserPromptPayload {
   session_id?: string;
@@ -21,20 +23,26 @@ export interface UserPromptPayload {
  */
 export async function runUserPrompt(payload?: unknown): Promise<void> {
   try {
-    let input: Record<string, unknown>;
-    if (payload !== undefined && payload !== null && typeof payload === "object") {
-      input = payload as Record<string, unknown>;
-    } else {
-      input = await readHookInput(process.stdin);
-    }
+    const input = await readHookPayload(payload);
 
     const sessionId = typeof input.session_id === "string" ? input.session_id : undefined;
     const prompt = typeof input.prompt === "string" ? input.prompt : undefined;
+    const cwd = typeof input.cwd === "string" ? input.cwd : undefined;
+    const eventName = typeof input.hook_event_name === "string"
+      ? input.hook_event_name
+      : undefined;
     const agentId = typeof input.agent_id === "string" ? input.agent_id : undefined;
     const scratchpadDir =
       typeof input.scratchpad_dir === "string" ? input.scratchpad_dir : undefined;
 
-    if (sessionId && prompt !== undefined) {
+    if (
+      sessionId &&
+      cwd &&
+      eventName === "UserPromptSubmit" &&
+      prompt !== undefined
+    ) {
+      const config = loadConfig(cwd);
+      if (!config.gate.enabled || !config.apiKey) return;
       const store = sessionStore({
         sessionId,
         agentId,

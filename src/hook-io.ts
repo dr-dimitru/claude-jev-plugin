@@ -348,7 +348,7 @@ export function sessionStore(options: SessionStoreOptions): SessionStore {
     const codePoints = Array.from(prompt);
     const bounded =
       codePoints.length > MAX_STORED_PROMPT_CHARS
-        ? codePoints.slice(-MAX_STORED_PROMPT_CHARS).join("")
+        ? codePoints.slice(0, MAX_STORED_PROMPT_CHARS).join("")
         : prompt;
 
     await update((current) => ({

@@ -82,7 +82,8 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
       isPromptHostAvailable({ permission_mode: "bypassPermissions" }),
       false,
     );
-    assert.equal(isPromptHostAvailable({ permission_mode: "default" }), true);
+    assert.equal(isPromptHostAvailable({ permission_mode: "default" }), undefined);
+    assert.equal(isPromptHostAvailable({ headless: true }), undefined);
   });
 
   let tempDir: string;
@@ -111,7 +112,9 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
     const sessionId = "session-test-prompt";
     await runUserPrompt({
       session_id: sessionId,
+      cwd: tempDir,
       scratchpad_dir: tempDir,
+      hook_event_name: "UserPromptSubmit",
       prompt: "Please refactor the login controller",
     });
 
@@ -121,6 +124,55 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
     });
     const prompt = await store.getPrompt();
     assert.equal(prompt, "Please refactor the login controller");
+  });
+
+  test("prompt capture skips disabled and unconfigured gates", async () => {
+    const disabledDir = path.join(tempDir, "disabled");
+    fs.mkdirSync(path.join(disabledDir, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(disabledDir, ".claude", "claude-jev.json"),
+      JSON.stringify({ gate: { enabled: false } })
+    );
+    await runUserPrompt({
+      session_id: "prompt-disabled",
+      cwd: disabledDir,
+      scratchpad_dir: tempDir,
+      hook_event_name: "UserPromptSubmit",
+      prompt: "must not persist",
+    });
+    assert.equal(
+      await sessionStore({ sessionId: "prompt-disabled", scratchpadDir: tempDir }).read(),
+      null
+    );
+
+    delete process.env.TYPESAFE_API_KEY;
+    await runUserPrompt({
+      session_id: "prompt-no-key",
+      cwd: tempDir,
+      scratchpad_dir: tempDir,
+      hook_event_name: "UserPromptSubmit",
+      prompt: "must not persist either",
+    });
+    assert.equal(
+      await sessionStore({ sessionId: "prompt-no-key", scratchpadDir: tempDir }).read(),
+      null
+    );
+  });
+
+  test("prompt capture stores the first 1200 Unicode code points", async () => {
+    const prompt = `${"A".repeat(1200)}${"🚀".repeat(20)}`;
+    await runUserPrompt({
+      session_id: "prompt-prefix",
+      cwd: tempDir,
+      scratchpad_dir: tempDir,
+      hook_event_name: "UserPromptSubmit",
+      prompt,
+    });
+    const stored = await sessionStore({
+      sessionId: "prompt-prefix",
+      scratchpadDir: tempDir,
+    }).getPrompt();
+    assert.equal(stored, "A".repeat(1200));
   });
 
   test("safe Bash command produces no decision and no stdout (clear)", async () => {
@@ -665,7 +717,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
     assert.equal(configFileContentAfter.gate.enabled, true);
   });
 
-  test("headless environment fails open when blockWithoutUI is false (default)", async () => {
+  test("documented non-interactive mode fails open while undocumented host fields defer to ask", async () => {
     const sessionId = "session-headless-fail-open";
     const store = sessionStore({ sessionId, scratchpadDir: tempDir });
     await store.setOverrides({ mode: "enforce" });
@@ -688,7 +740,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
       return new Response(JSON.stringify(wireResponse(resp)), { status: 200 });
     };
 
-    // permission_mode: "headless"
+    // Claude documents dontAsk as a non-interactive permission mode.
     const outputHeadless = await runPreTool(
       {
         session_id: sessionId,
@@ -696,14 +748,14 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
         scratchpad_dir: tempDir,
         hook_event_name: "PreToolUse",
         tool_name: "Write",
-        permission_mode: "headless",
+        permission_mode: "dontAsk",
         tool_input: { file_path: "/test.ts", content: "bad" },
       },
       { fetch: mockFetch as any }
     );
     assert.equal(outputHeadless, null);
 
-    // prompt_host: false
+    // Undocumented host fields cannot reliably identify non-interactive mode.
     const outputNoHost = await runPreTool(
       {
         session_id: sessionId,
@@ -716,7 +768,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
       },
       { fetch: mockFetch as any }
     );
-    assert.equal(outputNoHost, null);
+    assert.equal(outputNoHost?.hookSpecificOutput?.permissionDecision, "ask");
   });
 
   test("headless environment blocks with permissionDecision: 'deny' when blockWithoutUI is true", async () => {
@@ -754,7 +806,7 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
         scratchpad_dir: tempDir,
         hook_event_name: "PreToolUse",
         tool_name: "Write",
-        permission_mode: "headless",
+        permission_mode: "dontAsk",
         tool_input: { file_path: "/test.ts", content: "bad" },
       },
       { fetch: mockFetch as any }
@@ -900,7 +952,9 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
     const sessionId = "session-prompt-gate";
     await runUserPrompt({
       session_id: sessionId,
+      cwd: tempDir,
       scratchpad_dir: tempDir,
+      hook_event_name: "UserPromptSubmit",
       prompt: "Only update tests/gate.test.ts",
     });
 
