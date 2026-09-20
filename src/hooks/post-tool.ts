@@ -179,11 +179,27 @@ export async function runPostTool(
       return null;
     }
 
-    // 6. Normalize output and build cache key
+    // 6. Normalize and bound output once for both cache identity and request state.
     const normalized = normalizeToolOutput(payload);
-    const cacheKey = outputJudgmentKey(normalized, {
+    const boundedState = buildOutputState({
+      tool: normalized.tool,
+      cwd: normalized.cwd,
+      tool_input: normalized.toolInput,
+      output: normalized.output,
+      is_error: normalized.isError,
+      config: {
+        argumentChars: config.gate?.argumentChars ?? 400,
+        output: { outputChars: config.output.outputChars },
+        maxStateChars: config.maxStateChars ?? 8000,
+      },
+    });
+    const cacheKey = outputJudgmentKey(boundedState, {
       model: config.model ?? DEFAULT_MODEL,
       questions: OUTPUT_QUESTIONS,
+      thresholds: {
+        leakThreshold: config.output.leakThreshold ?? 0.9,
+        minConfidence: config.output.minConfidence ?? 0.6,
+      },
     });
     const ttlMs = 120 * 1000;
 
@@ -198,19 +214,6 @@ export async function runPostTool(
       cacheKey,
       ttlMs,
       async () => {
-        const boundedState = buildOutputState({
-          tool: normalized.tool,
-          cwd: normalized.cwd,
-          tool_input: normalized.toolInput,
-          output: normalized.output,
-          is_error: normalized.isError,
-          config: {
-            argumentChars: config.gate?.argumentChars ?? 400,
-            output: { outputChars: config.output.outputChars },
-            maxStateChars: config.maxStateChars ?? 8000,
-          },
-        });
-
         const response = await askFn({
           model: config.model ?? DEFAULT_MODEL,
           state: boundedState,
@@ -227,6 +230,8 @@ export async function runPostTool(
         scratchpadDir,
         sessionId,
         agentId,
+        lockTimeoutMs: 16_000,
+        staleLockMs: 30_000,
       }
     );
 

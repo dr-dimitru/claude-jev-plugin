@@ -254,12 +254,14 @@ function canonicalize(val: unknown): unknown {
 export function judgmentKey(
   state: unknown,
   questions: unknown = GATE_QUESTIONS,
-  model: string = "jev-latest"
+  model: string = "jev-latest",
+  decisionConfig?: unknown
 ): string {
   const canonical = {
     model,
     questions: canonicalize(questions),
     state: canonicalize(state),
+    decisionConfig: canonicalize(decisionConfig),
   };
   const serialized = JSON.stringify(canonical);
   return crypto.createHash("sha256").update(serialized, "utf-8").digest("hex");

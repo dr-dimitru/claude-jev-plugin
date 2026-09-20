@@ -254,26 +254,45 @@ function canonicalize(val: unknown): unknown {
 }
 
 export function outputJudgmentKey(
-  input: NormalizedOutput | OutputInput,
-  options?: { model?: string; questions?: unknown }
+  input: NormalizedOutput | OutputInput | Record<string, unknown>,
+  options?: {
+    model?: string;
+    questions?: unknown;
+    thresholds?: { leakThreshold: number; minConfidence: number };
+  }
 ): string {
-  const isNorm = "toolInput" in input;
-  const state = buildOutputState({
-    tool: input.tool,
-    cwd: input.cwd,
-    tool_input: isNorm ? (input as NormalizedOutput).toolInput : (input as OutputInput).tool_input,
-    output: input.output,
-    is_error: isNorm ? (input as NormalizedOutput).isError : (input as OutputInput).is_error,
-    config: !isNorm ? (input as OutputInput).config : undefined,
-  });
+  let state: Record<string, unknown>;
+  if ("toolInput" in input) {
+    const normalized = input as NormalizedOutput;
+    state = buildOutputState({
+      tool: normalized.tool,
+      cwd: normalized.cwd,
+      tool_input: normalized.toolInput,
+      output: normalized.output,
+      is_error: normalized.isError,
+    });
+  } else if ("config" in input) {
+    const outputInput = input as OutputInput;
+    state = buildOutputState({
+      tool: outputInput.tool,
+      cwd: outputInput.cwd,
+      tool_input: outputInput.tool_input,
+      output: outputInput.output,
+      is_error: outputInput.is_error,
+      config: outputInput.config,
+    });
+  } else {
+    state = input as Record<string, unknown>;
+  }
 
   const canonical = canonicalize({
-    tool: state.tool,
-    tool_input: state.tool_input,
-    is_error: state.is_error,
-    output: state.output,
+    state,
     model: options?.model ?? DEFAULT_MODEL,
     questions: options?.questions ?? OUTPUT_QUESTIONS,
+    thresholds: options?.thresholds ?? {
+      leakThreshold: DEFAULT_LEAK_THRESHOLD,
+      minConfidence: DEFAULT_CLASS_MIN_CONFIDENCE,
+    },
   });
 
   return crypto

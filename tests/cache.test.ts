@@ -3,6 +3,8 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
   getOrCreateCached,
   normalizeKey,
@@ -118,6 +120,28 @@ describe("Cache and Coordination", () => {
     assert.equal(val2.count, 2);
   });
 
+  test("file cache hits preserve the original expiry", async () => {
+    let calls = 0;
+    const producer = async () => ({ call: ++calls });
+    const key = "original-expiry";
+    const ttlMs = 1000;
+
+    await getOrCreateCached(key, ttlMs, producer, { cacheDir: tempDir });
+    clearMemoryCache();
+
+    const entryPath = path.join(tempDir, `${key}.json`);
+    const entry = JSON.parse(fs.readFileSync(entryPath, "utf8"));
+    entry.createdAt = Date.now() - 900;
+    fs.writeFileSync(entryPath, JSON.stringify(entry));
+
+    const fromFile = await getOrCreateCached(key, ttlMs, producer, { cacheDir: tempDir });
+    assert.equal(fromFile.call, 1);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const refreshed = await getOrCreateCached(key, ttlMs, producer, { cacheDir: tempDir });
+
+    assert.equal(refreshed.call, 2);
+  });
+
   test("concurrent calls coordinate and call producer only once", async () => {
     let producerCount = 0;
     const producer = async () => {
@@ -146,6 +170,57 @@ describe("Cache and Coordination", () => {
     assert.deepEqual(res1, { producerCount: 1 });
     assert.deepEqual(res2, { producerCount: 1 });
     assert.deepEqual(res3, { producerCount: 1 });
+  });
+
+  test("keeps a slow live producer lock fresh across processes", async () => {
+    const markerPath = path.join(tempDir, "producers.log");
+    const cacheModule = pathToFileURL(path.resolve(import.meta.dirname, "../src/cache.ts")).href;
+    const worker = `
+      import fs from "node:fs";
+      import { getOrCreateCached } from ${JSON.stringify(cacheModule)};
+      const [cacheDir, markerPath, delay] = process.argv.slice(1);
+      const value = await getOrCreateCached("slow-producer", 5000, async () => {
+        fs.appendFileSync(markerPath, process.pid + "\\n");
+        await new Promise(resolve => setTimeout(resolve, Number(delay)));
+        return { value: "shared" };
+      }, { cacheDir, lockTimeoutMs: 800, staleLockMs: 200, pollIntervalMs: 10 });
+      process.stdout.write(JSON.stringify(value));
+    `;
+    const runWorker = (delay: number) =>
+      new Promise<string>((resolve, reject) => {
+        const child = spawn(process.execPath, [
+          "--experimental-strip-types",
+          "--input-type=module",
+          "-e",
+          worker,
+          tempDir,
+          markerPath,
+          String(delay),
+        ]);
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        child.stdout.on("data", chunk => stdout.push(Buffer.from(chunk)));
+        child.stderr.on("data", chunk => stderr.push(Buffer.from(chunk)));
+        child.on("error", reject);
+        child.on("close", code => {
+          if (code === 0) resolve(Buffer.concat(stdout).toString("utf8"));
+          else reject(new Error(Buffer.concat(stderr).toString("utf8")));
+        });
+      });
+
+    const first = runWorker(400);
+    const lockPath = path.join(tempDir, "slow-producer.lock");
+    for (let i = 0; i < 100 && !fs.existsSync(lockPath); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(fs.existsSync(lockPath), true);
+    const second = runWorker(0);
+    const [firstOutput, secondOutput] = await Promise.all([first, second]);
+
+    assert.deepEqual(JSON.parse(firstOutput), { value: "shared" });
+    assert.deepEqual(JSON.parse(secondOutput), { value: "shared" });
+    const producers = fs.readFileSync(markerPath, "utf8").trim().split("\n");
+    assert.equal(producers.length, 1);
   });
 
   test("infrastructure failure is not cached as safe verdict; lock is cleaned up", async () => {

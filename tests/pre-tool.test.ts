@@ -861,6 +861,41 @@ describe("PreToolUse and UserPromptSubmit hooks", () => {
     assert.equal((output as any).hookSpecificOutput, undefined);
   });
 
+  test("isolates gate cache entries between main thread and subagents", async () => {
+    let calls = 0;
+    const response: JevResponse = {
+      answers: {
+        destructive: { type: "noul", noul: 0 },
+        exfiltration: { type: "noul", noul: 0 },
+        beyond_scope: { type: "noul", noul: 0 },
+        impact: {
+          type: "score",
+          score: 0,
+          legend: {},
+          probabilities: {},
+          confidence: 1,
+        },
+      },
+    };
+    const mockFetch = async () => {
+      calls++;
+      return new Response(JSON.stringify(wireResponse(response)), { status: 200 });
+    };
+    const payload = {
+      session_id: "session-agent-cache",
+      cwd: tempDir,
+      scratchpad_dir: tempDir,
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "git status" },
+    };
+
+    await runPreTool(payload, { fetch: mockFetch as any });
+    await runPreTool({ ...payload, agent_id: "agent-one" }, { fetch: mockFetch as any });
+
+    assert.equal(calls, 2);
+  });
+
   test("includes prior prompt from UserPromptSubmit in gate state", async () => {
     const sessionId = "session-prompt-gate";
     await runUserPrompt({

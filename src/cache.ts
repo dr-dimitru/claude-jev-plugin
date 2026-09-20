@@ -115,10 +115,15 @@ function ensureDirSync(dir: string): void {
   }
 }
 
+interface FileCacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
 async function readEntryFile<T>(
   filePath: string,
   ttlMs: number
-): Promise<T | null> {
+): Promise<FileCacheEntry<T> | null> {
   try {
     if (!fs.existsSync(filePath)) {
       return null;
@@ -132,11 +137,11 @@ async function readEntryFile<T>(
     if (typeof createdAt !== "number") {
       return null;
     }
-    if (Date.now() - createdAt > ttlMs) {
-      // Expired entry
+    const expiresAt = createdAt + ttlMs;
+    if (Date.now() >= expiresAt) {
       return null;
     }
-    return value as T;
+    return { value: value as T, expiresAt };
   } catch {
     return null;
   }
@@ -214,24 +219,45 @@ async function writeEntryFile<T>(
   }
 }
 
-async function getLockAge(lockPath: string): Promise<number | null> {
+interface LockMetadata {
+  pid?: number;
+  ownerToken?: string;
+  createdAt?: number;
+  heartbeatAt?: number;
+}
+
+async function readLockMetadata(lockPath: string): Promise<LockMetadata | null> {
   try {
-    if (!fs.existsSync(lockPath)) {
-      return null;
-    }
-    const stat = await fs.promises.stat(lockPath);
-    try {
-      const raw = await fs.promises.readFile(lockPath, "utf-8");
-      const meta = JSON.parse(raw);
-      if (typeof meta?.createdAt === "number") {
-        return Date.now() - meta.createdAt;
-      }
-    } catch {
-      // If content is empty or unparseable, fallback to stat mtime
-    }
-    return Date.now() - stat.mtimeMs;
+    const raw = await fs.promises.readFile(lockPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed as LockMetadata : null;
   } catch {
     return null;
+  }
+}
+
+async function getLockAge(lockPath: string): Promise<number | null> {
+  try {
+    const stat = await fs.promises.stat(lockPath);
+    const meta = await readLockMetadata(lockPath);
+    const timestamp = meta?.heartbeatAt ?? meta?.createdAt ?? stat.mtimeMs;
+    return Date.now() - timestamp;
+  } catch {
+    return null;
+  }
+}
+
+async function removeLockIfOwner(
+  lockPath: string,
+  ownerToken: string | undefined
+): Promise<boolean> {
+  const current = await readLockMetadata(lockPath);
+  if ((current?.ownerToken ?? undefined) !== ownerToken) return false;
+  try {
+    await fs.promises.unlink(lockPath);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -280,11 +306,8 @@ export async function getOrCreateCached<T>(
   // 3. Check file entry
   const existingEntry = await readEntryFile<T>(entryPath, ttlMs);
   if (existingEntry !== null) {
-    memoryCache.set(memoryKey, {
-      value: existingEntry,
-      expiresAt: Date.now() + ttlMs,
-    });
-    return existingEntry;
+    memoryCache.set(memoryKey, existingEntry);
+    return existingEntry.value;
   }
 
   // 4. Wrap execution in in-flight promise so same-process concurrent calls deduplicate
@@ -308,27 +331,43 @@ export async function getOrCreateCached<T>(
       }
 
       if (lockFd !== null) {
-        // We acquired the lock!
+        const ownerToken = crypto.randomBytes(16).toString("hex");
+        let heartbeat: ReturnType<typeof setInterval> | undefined;
         try {
-          // Double-check: did another process finish and write the file right before we got lock?
           const freshEntry = await readEntryFile<T>(entryPath, ttlMs);
           if (freshEntry !== null) {
-            memoryCache.set(memoryKey, {
-              value: freshEntry,
-              expiresAt: Date.now() + ttlMs,
-            });
-            return freshEntry;
+            memoryCache.set(memoryKey, freshEntry);
+            return freshEntry.value;
           }
 
-          const lockMeta = {
+          const createdAt = Date.now();
+          const lockMeta: LockMetadata = {
             pid: process.pid,
-            createdAt: Date.now(),
+            ownerToken,
+            createdAt,
+            heartbeatAt: createdAt,
           };
           await lockFd.writeFile(JSON.stringify(lockMeta), "utf-8");
           await lockFd.close();
           lockFd = null;
 
-          // Execute producer: if it fails, error is thrown and NOT cached as safe verdict
+          const heartbeatIntervalMs = Math.max(
+            25,
+            Math.min(1000, Math.floor(staleLockMs / 3))
+          );
+          heartbeat = setInterval(() => {
+            void (async () => {
+              const current = await readLockMetadata(lockPath);
+              if (current?.ownerToken !== ownerToken) return;
+              await fs.promises.writeFile(
+                lockPath,
+                JSON.stringify({ ...lockMeta, heartbeatAt: Date.now() }),
+                { encoding: "utf-8", mode: 0o600 }
+              ).catch(() => {});
+            })();
+          }, heartbeatIntervalMs);
+          heartbeat.unref?.();
+
           const result = await producer();
 
           await writeEntryFile(cacheDir, safeKey, result, ttlMs, maxEntries);
@@ -338,6 +377,7 @@ export async function getOrCreateCached<T>(
           });
           return result;
         } finally {
+          if (heartbeat) clearInterval(heartbeat);
           if (lockFd !== null) {
             try {
               await lockFd.close();
@@ -345,26 +385,24 @@ export async function getOrCreateCached<T>(
               // ignore
             }
           }
-          await fs.promises.unlink(lockPath).catch(() => {});
+          await removeLockIfOwner(lockPath, ownerToken);
         }
       }
 
       // Lock was held by another process: check if cached entry appeared
       const entryAfterWait = await readEntryFile<T>(entryPath, ttlMs);
       if (entryAfterWait !== null) {
-        memoryCache.set(memoryKey, {
-          value: entryAfterWait,
-          expiresAt: Date.now() + ttlMs,
-        });
-        return entryAfterWait;
+        memoryCache.set(memoryKey, entryAfterWait);
+        return entryAfterWait.value;
       }
 
       // Check if lock is stale
       const lockAge = await getLockAge(lockPath);
       if (lockAge !== null && lockAge > staleLockMs) {
-        // Stale lock: recover and retry
-        await fs.promises.unlink(lockPath).catch(() => {});
-        continue;
+        const staleMeta = await readLockMetadata(lockPath);
+        if (await removeLockIfOwner(lockPath, staleMeta?.ownerToken)) {
+          continue;
+        }
       }
 
       // Check if coordination wait timeout reached

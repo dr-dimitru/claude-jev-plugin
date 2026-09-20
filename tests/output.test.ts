@@ -20,6 +20,7 @@ import {
 import type { JevResponse, JevCall } from "../src/client.ts";
 import { sessionStore } from "../src/hook-io.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
+import { buildOutputState } from "../src/state.ts";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -190,6 +191,55 @@ describe("State Bounding and Stable Output Keys", () => {
     const keyA = outputJudgmentKey(normA);
     const keyB = outputJudgmentKey(normB);
     assert.equal(keyA, keyB, "Keys must match regardless of object property ordering");
+  });
+
+  it("includes cwd and effective thresholds in output keys", () => {
+    const base = buildOutputState({
+      tool: "Bash",
+      cwd: "/repo/a",
+      tool_input: { command: "npm test" },
+      output: "ok",
+      is_error: false,
+    });
+    const otherCwd = { ...base, cwd: "/repo/b" };
+    const options = {
+      model: "jev-latest",
+      questions: OUTPUT_QUESTIONS,
+      thresholds: { leakThreshold: 0.9, minConfidence: 0.6 },
+    };
+
+    assert.notEqual(
+      outputJudgmentKey(base as any, options as any),
+      outputJudgmentKey(otherCwd as any, options as any)
+    );
+    assert.notEqual(
+      outputJudgmentKey(base as any, options as any),
+      outputJudgmentKey(base as any, {
+        ...options,
+        thresholds: { leakThreshold: 0.8, minConfidence: 0.6 },
+      } as any)
+    );
+  });
+
+  it("produces distinct keys when effective output bounds change request state", () => {
+    const input = {
+      tool: "Bash",
+      cwd: "/repo",
+      tool_input: { command: "npm test" },
+      output: "0123456789",
+      is_error: false,
+    };
+    const short = buildOutputState({ ...input, config: { outputChars: 5 } });
+    const long = buildOutputState({ ...input, config: { outputChars: 10 } });
+    const options = {
+      model: "jev-latest",
+      questions: OUTPUT_QUESTIONS,
+      thresholds: { leakThreshold: 0.9, minConfidence: 0.6 },
+    };
+    assert.notEqual(
+      outputJudgmentKey(short as any, options as any),
+      outputJudgmentKey(long as any, options as any)
+    );
   });
 
   it("produces distinct keys when error flag or output differs", () => {

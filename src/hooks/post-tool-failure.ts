@@ -181,9 +181,25 @@ export async function runPostToolFailure(
     };
 
     const normalized = normalizeToolOutput(failurePayload);
-    const cacheKey = outputJudgmentKey(normalized, {
+    const boundedState = buildOutputState({
+      tool: normalized.tool,
+      cwd: normalized.cwd,
+      tool_input: normalized.toolInput,
+      output: normalized.output,
+      is_error: normalized.isError,
+      config: {
+        argumentChars: config.gate?.argumentChars ?? 400,
+        output: { outputChars: config.output.outputChars },
+        maxStateChars: config.maxStateChars ?? 8000,
+      },
+    });
+    const cacheKey = outputJudgmentKey(boundedState, {
       model: config.model ?? DEFAULT_MODEL,
       questions: OUTPUT_QUESTIONS,
+      thresholds: {
+        leakThreshold: config.output.leakThreshold ?? 0.9,
+        minConfidence: config.output.minConfidence ?? 0.6,
+      },
     });
     const ttlMs = 120 * 1000;
 
@@ -197,19 +213,6 @@ export async function runPostToolFailure(
       cacheKey,
       ttlMs,
       async () => {
-        const boundedState = buildOutputState({
-          tool: normalized.tool,
-          cwd: normalized.cwd,
-          tool_input: normalized.toolInput,
-          output: normalized.output,
-          is_error: normalized.isError,
-          config: {
-            argumentChars: config.gate?.argumentChars ?? 400,
-            output: { outputChars: config.output.outputChars },
-            maxStateChars: config.maxStateChars ?? 8000,
-          },
-        });
-
         const response = await askFn({
           model: config.model ?? DEFAULT_MODEL,
           state: boundedState,
@@ -226,6 +229,8 @@ export async function runPostToolFailure(
         scratchpadDir,
         sessionId,
         agentId,
+        lockTimeoutMs: 16_000,
+        staleLockMs: 30_000,
       }
     );
 

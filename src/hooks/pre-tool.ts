@@ -197,7 +197,10 @@ export async function runPreTool(
       config: config as any,
     });
 
-    const cacheKey = judgmentKey(gateState, GATE_QUESTIONS, config.model);
+    const cacheKey = judgmentKey(gateState, GATE_QUESTIONS, config.model, {
+      blockOn: config.gate.blockOn,
+      minConfidence: config.gate.minConfidence,
+    });
     const ttlMs = (config.gate.cacheSeconds ?? 120) * 1000;
 
     // 6. Call askJev / retrieve cached verdict
@@ -221,6 +224,9 @@ export async function runPreTool(
       {
         scratchpadDir,
         sessionId,
+        agentId,
+        lockTimeoutMs: 16_000,
+        staleLockMs: 30_000,
       }
     );
 
