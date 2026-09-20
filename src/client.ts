@@ -179,6 +179,30 @@ export function isRetryableStatus(status: number): boolean {
   return status === 429 || status === 529 || (status >= 500 && status <= 599);
 }
 
+/**
+ * Validates a TypeSafe endpoint before an Authorization header is constructed.
+ */
+export function validateEndpoint(endpoint: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    throw new JevError("Invalid TypeSafe endpoint URL", {
+      code: "INVALID_ENDPOINT",
+      retryable: false,
+    });
+  }
+
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw new JevError(
+      "TypeSafe endpoint must use HTTPS without embedded credentials",
+      { code: "INVALID_ENDPOINT", retryable: false }
+    );
+  }
+
+  return parsed.href;
+}
+
 // --- Response Validation ---
 
 function validateProbabilities(
@@ -457,7 +481,7 @@ export async function askJev(call: JevCall): Promise<JevResponse> {
   }
 
   const model = call.model ?? DEFAULT_MODEL;
-  const endpoint = call.endpoint ?? DEFAULT_ENDPOINT;
+  const endpoint = validateEndpoint(call.endpoint ?? DEFAULT_ENDPOINT);
   const timeoutMs = call.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const retries = call.retries ?? DEFAULT_RETRIES;
   const fetchFn = call.fetch ?? fetch;

@@ -127,6 +127,40 @@ describe("TypeSafe Jev Client", () => {
       assert.equal(capturedModel, "jev-custom-preview");
     });
 
+    it("rejects non-HTTPS endpoints before fetch", async () => {
+      let fetched = false;
+
+      await assert.rejects(
+        askJev({
+          apiKey: "test-key",
+          endpoint: "http://attacker.example/collect",
+          state: {},
+          questions: { q: { type: "noul", instructions: "Is it true?" } },
+          fetch: async () => {
+            fetched = true;
+            throw new Error("must not run");
+          },
+        }),
+        (error: unknown) =>
+          error instanceof JevError && error.code === "INVALID_ENDPOINT"
+      );
+
+      assert.equal(fetched, false);
+    });
+
+    it("rejects endpoints containing embedded credentials", async () => {
+      await assert.rejects(
+        askJev({
+          apiKey: "test-key",
+          endpoint: "https://user:password@api.typesafe.ai/v1/systemone",
+          state: {},
+          questions: { q: { type: "noul", instructions: "Is it true?" } },
+        }),
+        (error: unknown) =>
+          error instanceof JevError && error.code === "INVALID_ENDPOINT"
+      );
+    });
+
     it("reads apiKey from process.env.TYPESAFE_API_KEY when call.apiKey is omitted", async () => {
       process.env.TYPESAFE_API_KEY = "env-secret-key-abc";
       let authHeader = "";

@@ -131,10 +131,15 @@ function readJsonFileSync(filePath: string): unknown | null {
   }
 }
 
+interface MergeLayerOptions {
+  allowTransport: boolean;
+  allowSecretSources: boolean;
+}
+
 function mergeConfigLayer(
   target: LoadedConfig,
   raw: unknown,
-  baseDir?: string
+  options: MergeLayerOptions
 ): void {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return;
@@ -142,19 +147,37 @@ function mergeConfigLayer(
 
   const obj = raw as Record<string, unknown>;
 
-  if (typeof obj.model === "string" && obj.model.trim().length > 0) {
+  if (
+    options.allowTransport &&
+    typeof obj.model === "string" &&
+    obj.model.trim().length > 0
+  ) {
     target.model = obj.model.trim();
   }
 
-  if (typeof obj.endpoint === "string" && obj.endpoint.trim().length > 0) {
+  if (
+    options.allowTransport &&
+    typeof obj.endpoint === "string" &&
+    obj.endpoint.trim().length > 0
+  ) {
     target.endpoint = obj.endpoint.trim();
   }
 
-  if (typeof obj.timeoutMs === "number" && Number.isFinite(obj.timeoutMs) && obj.timeoutMs > 0) {
+  if (
+    options.allowTransport &&
+    typeof obj.timeoutMs === "number" &&
+    Number.isFinite(obj.timeoutMs) &&
+    obj.timeoutMs > 0
+  ) {
     target.timeoutMs = Math.round(obj.timeoutMs);
   }
 
-  if (typeof obj.retries === "number" && Number.isFinite(obj.retries) && obj.retries >= 0) {
+  if (
+    options.allowTransport &&
+    typeof obj.retries === "number" &&
+    Number.isFinite(obj.retries) &&
+    obj.retries >= 0
+  ) {
     target.retries = Math.round(obj.retries);
   }
 
@@ -162,11 +185,11 @@ function mergeConfigLayer(
     target.maxStateChars = Math.round(obj.maxStateChars);
   }
 
-  if (typeof obj.apiKey === "string" && obj.apiKey.trim().length > 0) {
-    target.apiKey = obj.apiKey.trim();
-  }
-
-  if (typeof obj.apiKeyFile === "string" && obj.apiKeyFile.trim().length > 0) {
+  if (
+    options.allowSecretSources &&
+    typeof obj.apiKeyFile === "string" &&
+    obj.apiKeyFile.trim().length > 0
+  ) {
     target.apiKeyFile = obj.apiKeyFile.trim();
   }
 
@@ -260,7 +283,10 @@ export function loadConfig(
     const globalPath = path.join(homeDir, ".claude", "claude-jev.json");
     const globalJson = readJsonFileSync(globalPath);
     if (globalJson) {
-      mergeConfigLayer(config, globalJson, homeDir);
+      mergeConfigLayer(config, globalJson, {
+        allowTransport: true,
+        allowSecretSources: true,
+      });
     }
   }
 
@@ -269,7 +295,10 @@ export function loadConfig(
     const projectPath = path.join(cwd, ".claude", "claude-jev.json");
     const projectJson = readJsonFileSync(projectPath);
     if (projectJson) {
-      mergeConfigLayer(config, projectJson, cwd);
+      mergeConfigLayer(config, projectJson, {
+        allowTransport: false,
+        allowSecretSources: false,
+      });
     }
   }
 
@@ -278,7 +307,7 @@ export function loadConfig(
     try {
       const resolvedKeyPath = path.isAbsolute(config.apiKeyFile)
         ? config.apiKeyFile
-        : path.resolve(cwd, config.apiKeyFile);
+        : path.resolve(homeDir, ".claude", config.apiKeyFile);
       if (fs.existsSync(resolvedKeyPath)) {
         const fileContent = fs.readFileSync(resolvedKeyPath, "utf-8").trim();
         if (fileContent.length > 0) {

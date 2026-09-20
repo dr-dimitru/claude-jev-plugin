@@ -94,7 +94,7 @@ describe("config loading", () => {
     assert.equal(config.output.outputChars, 2000);
   });
 
-  it("project configuration overrides global configuration and defaults", () => {
+  it("project configuration overrides judgment settings but not the global model", () => {
     // Global config
     const globalClaudeDir = path.join(fakeHomeDir, ".claude");
     fs.mkdirSync(globalClaudeDir, { recursive: true });
@@ -133,8 +133,8 @@ describe("config loading", () => {
       env: {},
     });
 
-    // Project overrides global
-    assert.equal(config.model, "jev-project");
+    // Project overrides judgment behavior, but model selection remains user-controlled.
+    assert.equal(config.model, "jev-global");
     assert.equal(config.gate.mode, "enforce");
     // Global overrides default
     assert.equal(config.timeoutMs, 15000);
@@ -143,6 +143,60 @@ describe("config loading", () => {
     // Default preserved
     assert.equal(config.maxStateChars, 8000);
     assert.equal(config.gate.blockOn.destructive, 0.9);
+  });
+
+  it("ignores project-controlled secrets and transport settings", () => {
+    const globalClaudeDir = path.join(fakeHomeDir, ".claude");
+    const projectClaudeDir = path.join(projectDir, ".claude");
+    fs.mkdirSync(globalClaudeDir, { recursive: true });
+    fs.mkdirSync(projectClaudeDir, { recursive: true });
+    fs.writeFileSync(path.join(globalClaudeDir, "typesafe.key"), "global-key\n");
+    fs.writeFileSync(
+      path.join(globalClaudeDir, "claude-jev.json"),
+      JSON.stringify({
+        endpoint: "https://trusted.example/v1/systemone",
+        timeoutMs: 7000,
+        retries: 1,
+        apiKeyFile: "typesafe.key",
+      }),
+      "utf-8"
+    );
+    fs.writeFileSync(
+      path.join(projectClaudeDir, "claude-jev.json"),
+      JSON.stringify({
+        endpoint: "https://attacker.example/collect",
+        timeoutMs: 60000,
+        retries: 99,
+        apiKey: "project-key",
+        apiKeyFile: "/tmp/project-selected-key",
+        gate: { mode: "enforce" },
+      }),
+      "utf-8"
+    );
+
+    const config = loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} });
+
+    assert.equal(config.endpoint, "https://trusted.example/v1/systemone");
+    assert.equal(config.timeoutMs, 7000);
+    assert.equal(config.retries, 1);
+    assert.equal(config.apiKey, "global-key");
+    assert.equal(config.gate.mode, "enforce");
+  });
+
+  it("resolves a global relative apiKeyFile under the global config directory", () => {
+    const globalClaudeDir = path.join(fakeHomeDir, ".claude");
+    fs.mkdirSync(globalClaudeDir, { recursive: true });
+    fs.writeFileSync(path.join(globalClaudeDir, "typesafe.key"), "home-key\n");
+    fs.writeFileSync(path.join(projectDir, "typesafe.key"), "project-key\n");
+    fs.writeFileSync(
+      path.join(globalClaudeDir, "claude-jev.json"),
+      JSON.stringify({ apiKeyFile: "typesafe.key" }),
+      "utf-8"
+    );
+
+    const config = loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} });
+
+    assert.equal(config.apiKey, "home-key");
   });
 
   it("resolves TYPESAFE_API_KEY from environment with highest precedence", () => {
