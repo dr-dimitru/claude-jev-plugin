@@ -535,6 +535,32 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       assert.doesNotMatch(readme, /non-interactive run[^\n]*therefore fails open/i);
     });
 
+    it("links every TypeSafe integration guide with Mermaid diagrams", () => {
+      const readme = fs.readFileSync(path.join(REPO_ROOT, "README.md"), "utf8");
+      const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+      const guides = [
+        "type-safe-integration.md",
+        "pre-tool-judgments.md",
+        "output-judgments.md",
+        "reliability-and-privacy.md",
+        "end-to-end-example.md",
+      ];
+
+      for (const guide of guides) {
+        const relativePath = `docs/${guide}`;
+        const fullPath = path.join(REPO_ROOT, relativePath);
+        assert.ok(fs.existsSync(fullPath), `Missing guide: ${relativePath}`);
+        assert.ok(
+          readme.includes(`](${relativePath})`),
+          `README does not link ${relativePath}`
+        );
+        assert.ok(pkg.files.includes(relativePath), `Package excludes ${relativePath}`);
+        const content = fs.readFileSync(fullPath, "utf8");
+        assert.match(content, /^# /, `${relativePath} needs a title`);
+        assert.match(content, /```mermaid/, `${relativePath} needs a Mermaid diagram`);
+      }
+    });
+
     it("marks architecture as implemented and reviewed", () => {
       const architecture = fs.readFileSync(
         path.join(REPO_ROOT, "docs", "architecture.md"),

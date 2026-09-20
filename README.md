@@ -52,6 +52,14 @@ API key is sent only as Bearer token to configured HTTPS TypeSafe endpoint. Do n
 
 Claude Code removes plugin data on uninstall unless `--keep-data` is passed. Legacy fallback state under `~/.cache/claude-jev` is outside Claude's plugin-data lifecycle and must be removed manually if no longer needed.
 
+## Detailed integration guides
+
+- [TypeSafe AI integration overview](docs/type-safe-integration.md)
+- [Pre-tool judgments](docs/pre-tool-judgments.md)
+- [Output judgments](docs/output-judgments.md)
+- [Reliability, privacy, and trust boundaries](docs/reliability-and-privacy.md)
+- [End-to-end judgment example](docs/end-to-end-example.md)
+
 ## How judgments work
 
 Claude Code invokes one local command hook for each matching event. Hook reads bounded JSON from stdin, calls TypeSafe, and writes either no output or one valid Claude hook response.

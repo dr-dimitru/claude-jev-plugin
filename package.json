@@ -14,6 +14,11 @@
     "dist",
     "hooks",
     "skills",
+    "docs/type-safe-integration.md",
+    "docs/pre-tool-judgments.md",
+    "docs/output-judgments.md",
+    "docs/reliability-and-privacy.md",
+    "docs/end-to-end-example.md",
     "README.md",
     "LICENSE"
   ],
