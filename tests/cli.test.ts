@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import * as http from "node:http";
 import { spawn, spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { sessionStore } from "../src/hook-io.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
@@ -86,6 +86,22 @@ describe("claude-jev CLI", { concurrency: false }, () => {
     } catch {
       // ignore cleanup errors
     }
+  });
+
+  describe("package metadata", () => {
+    it("declares runtime, license, package files, and opt-in enablement", () => {
+      const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+      const plugin = JSON.parse(
+        fs.readFileSync(path.join(REPO_ROOT, ".claude-plugin", "plugin.json"), "utf8")
+      );
+
+      assert.equal(pkg.license, "BSD-3-Clause");
+      assert.equal(pkg.engines.node, ">=22.6");
+      assert.equal(plugin.defaultEnabled, false);
+      assert.equal(plugin.license, "BSD-3-Clause");
+      assert.ok(Array.isArray(pkg.files));
+      assert.ok(pkg.devDependencies.typescript);
+    });
   });
 
   describe("File existence and permissions", () => {
@@ -386,180 +402,113 @@ describe("claude-jev CLI", { concurrency: false }, () => {
   });
 
   describe("manual check command", { concurrency: 1 }, () => {
+    const mockFetchImport = pathToFileURL(
+      path.join(REPO_ROOT, "tests", "fixtures", "mock-fetch.mjs")
+    ).href;
+    const gateResponse = (destructive: number, impact: number) => JSON.stringify({
+      model: "jev-test",
+      answers: {
+        destructive: { type: "noul", noul: destructive },
+        exfiltration: { type: "noul", noul: 0.05 },
+        beyond_scope: { type: "noul", noul: 0.1 },
+        impact: {
+          type: "score",
+          score: impact,
+          legend: {
+            "0": "None, it only reads",
+            "1": "Small, one file or one reversible change",
+            "2": "Large, many files or shared state",
+            "3": "Severe, data loss or a forced overwrite of shared history",
+          },
+          probabilities: impact >= 2.5
+            ? { "0": 0, "1": 0, "2": 0, "3": 1 }
+            : { "0": 1, "1": 0, "2": 0, "3": 0 },
+          confidence: 0.9,
+        },
+      },
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+
+    const runMockedCheck = async (
+      text: string,
+      response: string,
+      options?: { apiKey?: string; status?: number }
+    ) => {
+      const capturePath = path.join(
+        tempDir,
+        `capture-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
+      );
+      const result = await runCliAsync(
+        ["check", text, "--endpoint", "https://typesafe.test/v1/systemone"],
+        {
+          env: {
+            TYPESAFE_API_KEY: options?.apiKey ?? "test-api-key",
+            NODE_OPTIONS: `--import=${mockFetchImport}`,
+            CLAUDE_JEV_TEST_CAPTURE: capturePath,
+            CLAUDE_JEV_TEST_RESPONSE: response,
+            CLAUDE_JEV_TEST_STATUS: String(options?.status ?? 200),
+          },
+        }
+      );
+      const request = fs.existsSync(capturePath)
+        ? JSON.parse(fs.readFileSync(capturePath, "utf8"))
+        : undefined;
+      return { result, request };
+    };
+
     it("sends the same four gate questions to the direct client, applies local thresholds, and prints concise typed results", async () => {
-      const receivedBodies: any[] = [];
-      const server = http.createServer((req, res) => {
-        const chunks: Buffer[] = [];
-        req.on("data", (c) => chunks.push(c));
-        req.on("end", () => {
-          const bodyStr = Buffer.concat(chunks).toString("utf-8");
-          try {
-            receivedBodies.push(JSON.parse(bodyStr));
-          } catch {
-            receivedBodies.push(bodyStr);
-          }
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              model: "jev-latest",
-              answers: {
-                destructive: { type: "noul", noul: 0.95 },
-                exfiltration: { type: "noul", noul: 0.05 },
-                beyond_scope: { type: "noul", noul: 0.1 },
-                impact: {
-                  type: "score",
-                  score: 3.0,
-                  legend: { "0": "None", "1": "Small", "2": "Large", "3": "Severe" },
-                  probabilities: { "0": 0, "1": 0, "2": 0, "3": 1 },
-                  confidence: 0.9,
-                },
-              },
-            })
-          );
-        });
-      });
+      const { result, request } = await runMockedCheck(
+        "rm -rf /tmp/test && git push --force",
+        gateResponse(0.95, 3)
+      );
 
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-      const port = (server.address() as any).port;
-
-      try {
-        const res = await runCliAsync(
-          [
-            "check",
-            "rm -rf /tmp/test && git push --force",
-            "--endpoint",
-            `http://127.0.0.1:${port}`,
-          ],
-          {
-            env: { TYPESAFE_API_KEY: "test-api-key" },
-          }
-        );
-
-        assert.strictEqual(res.status, 0, `CLI error: ${res.stderr}`);
-        assert.match(res.stdout, /flagged:\s*(yes|true)/i);
-        assert.match(res.stdout, /destructive/i);
-        assert.match(res.stdout, /0\.95/);
-
-        assert.strictEqual(receivedBodies.length, 1);
-        const reqBody = receivedBodies[0];
-        assert.ok(reqBody.questions, "Request body must contain questions");
-        assert.ok(reqBody.questions.destructive, "Questions must include destructive");
-        assert.ok(reqBody.questions.exfiltration, "Questions must include exfiltration");
-        assert.ok(reqBody.questions.beyond_scope, "Questions must include beyond_scope");
-        assert.ok(reqBody.questions.impact, "Questions must include impact");
-        assert.strictEqual(reqBody.questions.destructive.type, "noul");
-        assert.strictEqual(reqBody.questions.impact.type, "score");
-        assert.match(reqBody.state.tool_input.command, /-rf/);
-        assert.match(reqBody.state.tool_input.command, /--force/);
-      } finally {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
+      assert.strictEqual(result.status, 0, `CLI error: ${result.stderr}`);
+      assert.match(result.stdout, /flagged:\s*(yes|true)/i);
+      assert.match(result.stdout, /destructive/i);
+      assert.match(result.stdout, /0\.95/);
+      assert.ok(request.questions.destructive);
+      assert.ok(request.questions.exfiltration);
+      assert.ok(request.questions.beyond_scope);
+      assert.ok(request.questions.impact);
+      assert.strictEqual(request.questions.destructive.type, "noul");
+      assert.strictEqual(request.questions.impact.type, "score");
+      assert.match(request.state.tool_input.command, /-rf/);
+      assert.match(request.state.tool_input.command, /--force/);
     });
 
     it("bounds oversized input and never prints unbounded input", async () => {
-      const receivedBodies: any[] = [];
-      const server = http.createServer((req, res) => {
-        const chunks: Buffer[] = [];
-        req.on("data", (c) => chunks.push(c));
-        req.on("end", () => {
-          const bodyStr = Buffer.concat(chunks).toString("utf-8");
-          try {
-            receivedBodies.push(JSON.parse(bodyStr));
-          } catch {
-            receivedBodies.push(bodyStr);
-          }
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              model: "jev-latest",
-              answers: {
-                destructive: { type: "noul", noul: 0.1 },
-                exfiltration: { type: "noul", noul: 0.1 },
-                beyond_scope: { type: "noul", noul: 0.1 },
-                impact: {
-                  type: "score",
-                  score: 0.0,
-                  legend: {},
-                  probabilities: {},
-                  confidence: 0.8,
-                },
-              },
-            })
-          );
-        });
-      });
+      const hugeInput = "echo " + "A".repeat(5000);
+      const { result, request } = await runMockedCheck(
+        hugeInput,
+        gateResponse(0.1, 0)
+      );
 
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-      const port = (server.address() as any).port;
-
-      try {
-        const hugeInput = "echo " + "A".repeat(5000);
-        const res = await runCliAsync(
-          [
-            "check",
-            hugeInput,
-            "--endpoint",
-            `http://127.0.0.1:${port}`,
-          ],
-          {
-            env: { TYPESAFE_API_KEY: "test-api-key" },
-          }
-        );
-
-        assert.strictEqual(res.status, 0, `CLI error: ${res.stderr}`);
-        assert.strictEqual(receivedBodies.length, 1);
-        const reqBody = receivedBodies[0];
-        const cmd = reqBody.state?.tool_input?.command ?? "";
-        assert.ok(cmd.includes("chars elided]"), "Long command must be bounded with elided marker");
-        assert.ok(cmd.length < 1000, "Bounded command must not exceed state budget");
-      } finally {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
+      assert.strictEqual(result.status, 0, `CLI error: ${result.stderr}`);
+      const command = request.state?.tool_input?.command ?? "";
+      assert.ok(command.includes("chars elided]"));
+      assert.ok(command.length < 1000);
     });
 
     it("handles missing API key safely without unhandled exception", () => {
-      const res = runCli(["check", "echo hello"], {
+      const result = runCli(["check", "echo hello"], {
         env: { TYPESAFE_API_KEY: "" },
       });
-      assert.notStrictEqual(res.status, 0);
-      assert.match(
-        res.stderr + res.stdout,
-        /missing.*api.*key|TYPESAFE_API_KEY/i
-      );
+      assert.notStrictEqual(result.status, 0);
+      assert.match(result.stderr + result.stdout, /missing.*api.*key|TYPESAFE_API_KEY/i);
     });
 
     it("redacts API keys from errors when API fails", async () => {
-      const server = http.createServer((_req, res) => {
-        res.writeHead(401, { "Content-Type": "text/plain" });
-        res.end("Invalid secret: super-secret-key-to-redact");
-      });
+      const apiKey = "synthetic-key-for-redaction";
+      const { result } = await runMockedCheck(
+        "echo test",
+        `Invalid secret: ${apiKey}`,
+        { apiKey, status: 401 }
+      );
 
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-      const port = (server.address() as any).port;
-
-      try {
-        const res = await runCliAsync(
-          [
-            "check",
-            "echo test",
-            "--endpoint",
-            `http://127.0.0.1:${port}`,
-          ],
-          {
-            env: { TYPESAFE_API_KEY: "super-secret-key-to-redact" },
-          }
-        );
-
-        assert.notStrictEqual(res.status, 0);
-        const combined = res.stderr + res.stdout;
-        assert.ok(
-          !combined.includes("super-secret-key-to-redact"),
-          "API key must be redacted from error output"
-        );
-        assert.match(combined, /\[REDACTED\]/);
-      } finally {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
+      assert.notStrictEqual(result.status, 0);
+      const combined = result.stderr + result.stdout;
+      assert.equal(combined.includes(apiKey), false);
+      assert.match(combined, /\[REDACTED\]/);
     });
   });
 

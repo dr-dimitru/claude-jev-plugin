@@ -82,4 +82,4 @@ export declare function evaluateGate(responseOrAnswers: JevResponse | Record<str
  * Produces a stable, normalized SHA-256 judgment key.
  * Normalizes object key ordering so identical state generates identical hash.
  */
-export declare function judgmentKey(state: unknown, questions?: unknown, model?: string): string;
+export declare function judgmentKey(state: unknown, questions?: unknown, model?: string, decisionConfig?: unknown): string;

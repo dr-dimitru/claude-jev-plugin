@@ -5,24 +5,30 @@
  * Returns no stdout to Claude Code. Never fails with non-zero exit code.
  */
 import { pathToFileURL } from "node:url";
-import { readHookInput, sessionStore } from "../hook-io.js";
+import { sessionStore } from "../hook-io.js";
+import { readHookPayload } from "./common.js";
+import { loadConfig } from "../config.js";
 /**
  * Handles UserPromptSubmit payload.
  */
 export async function runUserPrompt(payload) {
     try {
-        let input;
-        if (payload !== undefined && payload !== null && typeof payload === "object") {
-            input = payload;
-        }
-        else {
-            input = await readHookInput(process.stdin);
-        }
+        const input = await readHookPayload(payload);
         const sessionId = typeof input.session_id === "string" ? input.session_id : undefined;
         const prompt = typeof input.prompt === "string" ? input.prompt : undefined;
+        const cwd = typeof input.cwd === "string" ? input.cwd : undefined;
+        const eventName = typeof input.hook_event_name === "string"
+            ? input.hook_event_name
+            : undefined;
         const agentId = typeof input.agent_id === "string" ? input.agent_id : undefined;
         const scratchpadDir = typeof input.scratchpad_dir === "string" ? input.scratchpad_dir : undefined;
-        if (sessionId && prompt !== undefined) {
+        if (sessionId &&
+            cwd &&
+            eventName === "UserPromptSubmit" &&
+            prompt !== undefined) {
+            const config = loadConfig(cwd);
+            if (!config.gate.enabled || !config.apiKey)
+                return;
             const store = sessionStore({
                 sessionId,
                 agentId,

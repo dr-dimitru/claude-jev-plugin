@@ -128,6 +128,7 @@ export interface SessionStoreOptions {
   agentId?: string;
   scratchpadDir?: string;
   homeDir?: string;
+  env?: Record<string, string | undefined>;
   maxRecordBytes?: number;
 }
 
@@ -158,14 +159,17 @@ export interface SessionStore {
  */
 export function sessionStore(options: SessionStoreOptions): SessionStore {
   const { sessionId, agentId, scratchpadDir, homeDir } = options;
+  const env = options.env ?? process.env;
   const maxRecordBytes = options.maxRecordBytes ?? DEFAULT_MAX_SESSION_RECORD_BYTES;
 
   // Determine safe base directory
   let baseDir: string;
   if (scratchpadDir && scratchpadDir.trim().length > 0) {
     baseDir = path.resolve(scratchpadDir.trim());
+  } else if (env.CLAUDE_PLUGIN_DATA?.trim()) {
+    baseDir = path.join(path.resolve(env.CLAUDE_PLUGIN_DATA.trim()), "sessions");
   } else {
-    const userHome = homeDir ?? process.env.HOME ?? os.homedir();
+    const userHome = homeDir ?? env.HOME ?? os.homedir();
     baseDir = path.join(userHome, ".cache", "claude-jev");
   }
 

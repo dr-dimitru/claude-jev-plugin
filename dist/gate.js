@@ -179,11 +179,12 @@ function canonicalize(val) {
  * Produces a stable, normalized SHA-256 judgment key.
  * Normalizes object key ordering so identical state generates identical hash.
  */
-export function judgmentKey(state, questions = GATE_QUESTIONS, model = "jev-latest") {
+export function judgmentKey(state, questions = GATE_QUESTIONS, model = "jev-latest", decisionConfig) {
     const canonical = {
         model,
         questions: canonicalize(questions),
         state: canonicalize(state),
+        decisionConfig: canonicalize(decisionConfig),
     };
     const serialized = JSON.stringify(canonical);
     return crypto.createHash("sha256").update(serialized, "utf-8").digest("hex");

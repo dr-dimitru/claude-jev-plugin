@@ -6,7 +6,7 @@
  */
 export declare const DEFAULT_MODEL = "jev-latest";
 export declare const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
-export declare const DEFAULT_TIMEOUT_MS = 20000;
+export declare const DEFAULT_TIMEOUT_MS = 15000;
 export declare const DEFAULT_RETRIES = 2;
 /**
  * Register an API key in memory so it will be scrubbed from errors and diagnostics.
@@ -104,9 +104,14 @@ export declare class JevError extends Error {
  */
 export declare function isRetryableStatus(status: number): boolean;
 /**
+ * Validates a TypeSafe endpoint before an Authorization header is constructed.
+ */
+export declare function validateEndpoint(endpoint: string): string;
+/**
  * Strictly validates the wire response shape from TypeSafe Jev.
  */
 export declare function validateJevResponse(raw: unknown, expectedQuestions?: Record<string, JevQuestion>): JevResponse;
+export declare function parseRetryAfter(value: string | null | undefined, now?: number): number | undefined;
 /**
  * Directly posts a request to TypeSafe System One and returns the validated response.
  */

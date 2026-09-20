@@ -36,6 +36,7 @@ export interface SessionStoreOptions {
     agentId?: string;
     scratchpadDir?: string;
     homeDir?: string;
+    env?: Record<string, string | undefined>;
     maxRecordBytes?: number;
 }
 export interface SessionStore {
@@ -50,6 +51,8 @@ export interface SessionStore {
     getLastVerdict(type?: "gate" | "output"): Promise<unknown>;
     setLastVerdict(type: "gate" | "output", verdict: unknown): Promise<void>;
     hasSeenToolUseId(toolUseId: string): Promise<boolean>;
+    claimToolUseId(toolUseId: string): Promise<boolean>;
+    releaseToolUseId(toolUseId: string): Promise<void>;
     recordToolUseId(toolUseId: string): Promise<void>;
     getCacheMetadata(key: string): Promise<unknown>;
     setCacheMetadata(key: string, value: unknown): Promise<void>;

@@ -1,9 +1,15 @@
 {
   "name": "claude-jev",
+  "displayName": "Claude Jev",
   "version": "0.1.0",
   "description": "Semantic guardrails and output verification for Claude Code powered by TypeSafe Jev",
   "author": {
     "name": "dr.dimitru",
     "url": "https://github.com/dr-dimitru"
-  }
+  },
+  "homepage": "https://github.com/dr-dimitru/claude-jev-plugin#readme",
+  "repository": "https://github.com/dr-dimitru/claude-jev-plugin",
+  "license": "BSD-3-Clause",
+  "keywords": ["guardrails", "typesafe", "jev", "tool-use"],
+  "defaultEnabled": false
 }

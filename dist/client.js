@@ -6,7 +6,7 @@
  */
 export const DEFAULT_MODEL = "jev-latest";
 export const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
-export const DEFAULT_TIMEOUT_MS = 20000;
+export const DEFAULT_TIMEOUT_MS = 15000;
 export const DEFAULT_RETRIES = 2;
 // --- Registered API Keys & Redaction ---
 const registeredKeys = new Set();
@@ -79,20 +79,52 @@ export class JevError extends Error {
 export function isRetryableStatus(status) {
     return status === 429 || status === 529 || (status >= 500 && status <= 599);
 }
+/**
+ * Validates a TypeSafe endpoint before an Authorization header is constructed.
+ */
+export function validateEndpoint(endpoint) {
+    let parsed;
+    try {
+        parsed = new URL(endpoint);
+    }
+    catch {
+        throw new JevError("Invalid TypeSafe endpoint URL", {
+            code: "INVALID_ENDPOINT",
+            retryable: false,
+        });
+    }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+        throw new JevError("TypeSafe endpoint must use HTTPS without embedded credentials", { code: "INVALID_ENDPOINT", retryable: false });
+    }
+    return parsed.href;
+}
 // --- Response Validation ---
-function validateProbabilities(probs, qName) {
+function validateProbabilities(probs, qName, expectedKeys) {
     if (!probs || typeof probs !== "object" || Array.isArray(probs)) {
         throw new JevError(`Malformed answer for question '${qName}': probabilities must be an object`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     const obj = probs;
+    const keys = Object.keys(obj);
+    const actual = [...keys].sort();
+    const expected = [...expectedKeys].sort();
+    if (keys.length === 0 ||
+        actual.length !== expected.length ||
+        actual.some((key, index) => key !== expected[index])) {
+        throw new JevError(`Malformed answer for question '${qName}': probability keys must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
+    }
+    let total = 0;
     for (const [k, v] of Object.entries(obj)) {
         if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) {
             throw new JevError(`Malformed answer for question '${qName}': probability for '${k}' must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
+        total += v;
+    }
+    if (Math.abs(total - 1) > 0.001) {
+        throw new JevError(`Malformed answer for question '${qName}': probabilities must sum to 1`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     return obj;
 }
-function validateAnswer(rawAnswer, qName, expectedType) {
+function validateAnswer(rawAnswer, qName, expectedQuestion) {
     if (!rawAnswer || typeof rawAnswer !== "object" || Array.isArray(rawAnswer)) {
         throw new JevError(`Malformed answer for question '${qName}': expected object`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
@@ -101,8 +133,8 @@ function validateAnswer(rawAnswer, qName, expectedType) {
     if (typeof ansType !== "string") {
         throw new JevError(`Malformed answer for question '${qName}': missing answer type`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
-    if (expectedType !== undefined && ansType !== expectedType) {
-        throw new JevError(`Malformed answer for question '${qName}': answer type '${ansType}' does not match question type '${expectedType}'`, { code: "MALFORMED_RESPONSE", retryable: false });
+    if (expectedQuestion !== undefined && ansType !== expectedQuestion.type) {
+        throw new JevError(`Malformed answer for question '${qName}': answer type '${ansType}' does not match question type '${expectedQuestion.type}'`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     if (ansType === "noul") {
         if (typeof ans.noul !== "number" ||
@@ -120,7 +152,13 @@ function validateAnswer(rawAnswer, qName, expectedType) {
         if (typeof ans.choice !== "string") {
             throw new JevError(`Malformed answer for question '${qName}': choice must be a string`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
-        const probs = validateProbabilities(ans.probabilities, qName);
+        const expectedKeys = expectedQuestion?.type === "choice"
+            ? Object.keys(expectedQuestion.criteria)
+            : Object.keys(ans.probabilities ?? {});
+        if (!expectedKeys.includes(ans.choice)) {
+            throw new JevError(`Malformed answer for question '${qName}': choice must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
+        }
+        const probs = validateProbabilities(ans.probabilities, qName, expectedKeys);
         if (typeof ans.confidence !== "number" ||
             !Number.isFinite(ans.confidence) ||
             ans.confidence < 0 ||
@@ -147,7 +185,17 @@ function validateAnswer(rawAnswer, qName, expectedType) {
                 throw new JevError(`Malformed answer for question '${qName}': legend value for '${k}' must be a string`, { code: "MALFORMED_RESPONSE", retryable: false });
             }
         }
-        const probs = validateProbabilities(ans.probabilities, qName);
+        const expectedCriteria = expectedQuestion?.type === "score"
+            ? expectedQuestion.criteria
+            : Object.values(legendObj);
+        const expectedKeys = expectedCriteria.map((_, index) => String(index));
+        if (ans.score < 0 ||
+            ans.score > expectedCriteria.length - 1 ||
+            Object.keys(legendObj).length !== expectedKeys.length ||
+            expectedKeys.some((key, index) => legendObj[key] !== expectedCriteria[index])) {
+            throw new JevError(`Malformed answer for question '${qName}': score legend must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
+        }
+        const probs = validateProbabilities(ans.probabilities, qName, expectedKeys);
         if (typeof ans.confidence !== "number" ||
             !Number.isFinite(ans.confidence) ||
             ans.confidence < 0 ||
@@ -189,13 +237,19 @@ export function validateJevResponse(raw, expectedQuestions) {
             if (!(qName in answersObj)) {
                 throw new JevError(`Malformed response: missing answer for question '${qName}'`, { code: "MALFORMED_RESPONSE", retryable: false });
             }
-            validatedAnswers[qName] = validateAnswer(answersObj[qName], qName, qDef.type);
+            validatedAnswers[qName] = validateAnswer(answersObj[qName], qName, qDef);
         }
     }
     else {
         for (const [qName, rawAns] of Object.entries(answersObj)) {
             validatedAnswers[qName] = validateAnswer(rawAns, qName);
         }
+    }
+    if (typeof rawObj.model !== "string" || rawObj.model.trim().length === 0) {
+        throw new JevError("Malformed response: model must be a non-empty string", {
+            code: "MALFORMED_RESPONSE",
+            retryable: false,
+        });
     }
     let validatedUsage;
     if (rawObj.usage !== undefined) {
@@ -218,6 +272,12 @@ export function validateJevResponse(raw, expectedQuestions) {
             ...u,
         };
     }
+    else {
+        throw new JevError("Malformed response: missing usage object", {
+            code: "MALFORMED_RESPONSE",
+            retryable: false,
+        });
+    }
     const result = {
         ...rawObj,
         answers: validatedAnswers,
@@ -227,24 +287,35 @@ export function validateJevResponse(raw, expectedQuestions) {
     }
     return result;
 }
+export function parseRetryAfter(value, now = Date.now()) {
+    if (!value)
+        return undefined;
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+        return Math.round(seconds * 1000);
+    }
+    const date = Date.parse(value);
+    if (!Number.isFinite(date))
+        return undefined;
+    return Math.max(0, date - now);
+}
 function sleep(ms, signal) {
     return new Promise((resolve, reject) => {
+        let timer;
+        const onAbort = () => {
+            if (timer)
+                clearTimeout(timer);
+            reject(signal?.reason ?? new Error("Aborted"));
+        };
         if (signal?.aborted) {
-            return reject(new JevError("Request aborted by caller", {
-                code: "ABORTED",
-                retryable: false,
-                cause: signal.reason,
-            }));
+            onAbort();
+            return;
         }
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener("abort", () => {
-            clearTimeout(timer);
-            reject(new JevError("Request aborted by caller", {
-                code: "ABORTED",
-                retryable: false,
-                cause: signal.reason,
-            }));
-        }, { once: true });
+        timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
     });
 }
 // --- Direct Jev Invocation ---
@@ -252,141 +323,148 @@ function sleep(ms, signal) {
  * Directly posts a request to TypeSafe System One and returns the validated response.
  */
 export async function askJev(call) {
-    if (call.apiKey) {
+    if (call.apiKey)
         registerApiKey(call.apiKey);
-    }
     const envKey = process.env.TYPESAFE_API_KEY?.trim();
-    if (envKey) {
+    if (envKey)
         registerApiKey(envKey);
-    }
-    const apiKey = (call.apiKey?.trim() || envKey);
-    if (!apiKey || apiKey.length === 0) {
+    const apiKey = call.apiKey?.trim() || envKey;
+    if (!apiKey) {
         throw new JevError("Missing TypeSafe API key. Set TYPESAFE_API_KEY or provide apiKey in JevCall.", { code: "MISSING_KEY", retryable: false });
     }
     const model = call.model ?? DEFAULT_MODEL;
-    const endpoint = call.endpoint ?? DEFAULT_ENDPOINT;
+    const endpoint = validateEndpoint(call.endpoint ?? DEFAULT_ENDPOINT);
     const timeoutMs = call.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const retries = call.retries ?? DEFAULT_RETRIES;
     const fetchFn = call.fetch ?? fetch;
-    if (call.signal?.aborted) {
-        throw new JevError("Request aborted by caller", {
-            code: "ABORTED",
-            retryable: false,
-            cause: call.signal.reason,
-        });
-    }
-    const requestBody = JSON.stringify({
-        model,
-        state: call.state,
-        questions: call.questions,
-    });
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        if (call.signal?.aborted) {
+    const deadline = Date.now() + timeoutMs;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error("Timeout"));
+    }, timeoutMs);
+    const onCallerAbort = () => controller.abort(call.signal?.reason);
+    if (call.signal) {
+        if (call.signal.aborted) {
+            clearTimeout(timeoutId);
             throw new JevError("Request aborted by caller", {
                 code: "ABORTED",
                 retryable: false,
                 cause: call.signal.reason,
             });
         }
-        const attemptController = new AbortController();
-        let timedOut = false;
-        const timeoutId = setTimeout(() => {
-            timedOut = true;
-            attemptController.abort(new Error("Timeout"));
-        }, timeoutMs);
-        const onCallerAbort = () => {
-            attemptController.abort(call.signal?.reason);
-        };
-        if (call.signal) {
-            call.signal.addEventListener("abort", onCallerAbort, { once: true });
-        }
-        try {
-            const res = await fetchFn(endpoint, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${apiKey}`,
-                },
-                body: requestBody,
-                signal: attemptController.signal,
-            });
-            clearTimeout(timeoutId);
-            if (call.signal) {
-                call.signal.removeEventListener("abort", onCallerAbort);
-            }
-            if (res.ok) {
-                let json;
-                try {
-                    json = await res.json();
-                }
-                catch (parseErr) {
-                    throw new JevError(`Malformed JSON response from TypeSafe API: ${parseErr.message}`, {
-                        code: "MALFORMED_JSON",
-                        retryable: false,
-                        cause: parseErr,
-                    });
-                }
-                return validateJevResponse(json, call.questions);
-            }
-            const status = res.status;
-            const retryable = isRetryableStatus(status);
-            const rawBody = await res.text().catch(() => "");
-            const boundedBody = redact(boundText(rawBody, 500));
-            if (retryable && attempt < retries) {
-                const delay = call.retryDelayMs ?? (attempt === 0 ? 50 : 100);
-                if (delay > 0) {
-                    await sleep(delay, call.signal);
-                }
-                continue;
-            }
-            throw new JevError(`TypeSafe API error (HTTP ${status}): ${boundedBody || res.statusText || "Unknown error"}`, {
-                status,
-                retryable,
-                code: `HTTP_${status}`,
+        call.signal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+    const requestBody = JSON.stringify({
+        model,
+        state: call.state,
+        questions: call.questions,
+    });
+    const abortError = () => {
+        if (call.signal?.aborted) {
+            return new JevError("Request aborted by caller", {
+                code: "ABORTED",
+                retryable: false,
+                cause: call.signal.reason,
             });
         }
-        catch (err) {
-            clearTimeout(timeoutId);
-            if (call.signal) {
-                call.signal.removeEventListener("abort", onCallerAbort);
+        return new JevError(`Request timed out after ${timeoutMs}ms`, {
+            code: "TIMEOUT",
+            retryable: true,
+            cause: controller.signal.reason,
+        });
+    };
+    const retryDelay = (attempt, response) => {
+        const headerDelay = parseRetryAfter(response?.headers?.get("Retry-After"));
+        if (headerDelay !== undefined)
+            return headerDelay;
+        if (call.retryDelayMs !== undefined)
+            return call.retryDelayMs;
+        const base = Math.min(2000, 250 * 2 ** attempt);
+        return Math.round(base * (0.75 + Math.random() * 0.5));
+    };
+    try {
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            if (controller.signal.aborted || Date.now() >= deadline) {
+                throw abortError();
             }
-            if (call.signal?.aborted) {
-                throw new JevError("Request aborted by caller", {
-                    code: "ABORTED",
-                    retryable: false,
-                    cause: call.signal.reason,
+            try {
+                const res = await fetchFn(endpoint, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${apiKey}`,
+                    },
+                    body: requestBody,
+                    signal: controller.signal,
+                });
+                if (res.ok) {
+                    let json;
+                    try {
+                        json = await res.json();
+                    }
+                    catch (parseErr) {
+                        if (controller.signal.aborted)
+                            throw abortError();
+                        throw new JevError(`Malformed JSON response from TypeSafe API: ${parseErr.message}`, { code: "MALFORMED_JSON", retryable: false, cause: parseErr });
+                    }
+                    return validateJevResponse(json, call.questions);
+                }
+                const status = res.status;
+                const retryable = isRetryableStatus(status);
+                const rawBody = await res.text().catch((error) => {
+                    if (controller.signal.aborted)
+                        throw abortError();
+                    throw error;
+                });
+                const boundedBody = redact(boundText(rawBody, 500));
+                if (retryable && attempt < retries) {
+                    const delay = retryDelay(attempt, res);
+                    const remaining = deadline - Date.now();
+                    if (delay >= remaining) {
+                        await sleep(Math.max(0, remaining), controller.signal);
+                        throw abortError();
+                    }
+                    if (delay > 0)
+                        await sleep(delay, controller.signal);
+                    continue;
+                }
+                throw new JevError(`TypeSafe API error (HTTP ${status}): ${boundedBody || res.statusText || "Unknown error"}`, { status, retryable, code: `HTTP_${status}` });
+            }
+            catch (err) {
+                if (controller.signal.aborted || timedOut || Date.now() >= deadline) {
+                    throw abortError();
+                }
+                if (err instanceof JevError)
+                    throw err;
+                const name = err?.name;
+                const isNetwork = name === "AbortError" || name === "TimeoutError" || name === "TypeError";
+                if (isNetwork && attempt < retries) {
+                    const delay = retryDelay(attempt);
+                    const remaining = deadline - Date.now();
+                    if (delay >= remaining) {
+                        await sleep(Math.max(0, remaining), controller.signal);
+                        throw abortError();
+                    }
+                    if (delay > 0)
+                        await sleep(delay, controller.signal);
+                    continue;
+                }
+                throw new JevError(`Network error: ${err.message}`, {
+                    code: "NETWORK_ERROR",
+                    retryable: true,
+                    cause: err,
                 });
             }
-            if (err instanceof JevError) {
-                throw err;
-            }
-            const isTimeout = timedOut ||
-                (attemptController.signal.aborted &&
-                    attemptController.signal.reason?.message === "Timeout") ||
-                err?.name === "TimeoutError";
-            const isNetworkOrTimeout = isTimeout ||
-                err?.name === "AbortError" ||
-                err?.name === "TypeError";
-            if (isNetworkOrTimeout && attempt < retries) {
-                const delay = call.retryDelayMs ?? (attempt === 0 ? 50 : 100);
-                if (delay > 0) {
-                    await sleep(delay, call.signal);
-                }
-                continue;
-            }
-            const code = isTimeout ? "TIMEOUT" : "NETWORK_ERROR";
-            const msg = isTimeout
-                ? `Request timed out after ${timeoutMs}ms`
-                : `Network error: ${err.message}`;
-            throw new JevError(msg, {
-                code,
-                retryable: true,
-                cause: err,
-            });
         }
+        throw new JevError("Request failed: maximum retries exhausted", {
+            code: "RETRIES_EXHAUSTED",
+            retryable: true,
+        });
     }
-    throw new JevError("Request failed: maximum retries exhausted", {
-        code: "RETRIES_EXHAUSTED",
-        retryable: true,
-    });
+    finally {
+        clearTimeout(timeoutId);
+        call.signal?.removeEventListener("abort", onCallerAbort);
+    }
 }

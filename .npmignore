@@ -1,0 +1,6 @@
+src/
+tests/
+docs/superpowers/
+.superpowers/
+coverage/
+*.log

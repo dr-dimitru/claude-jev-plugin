@@ -8,10 +8,40 @@
   "bin": {
     "claude-jev": "bin/claude-jev"
   },
+  "files": [
+    ".claude-plugin",
+    "bin",
+    "dist",
+    "hooks",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
-    "test": "node --experimental-strip-types --test"
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --noEmit",
+    "check": "npm test && npm run typecheck && npm run build",
+    "validate:plugin": "claude plugin validate . --strict"
+  },
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dr-dimitru/claude-jev-plugin.git"
+  },
+  "homepage": "https://github.com/dr-dimitru/claude-jev-plugin#readme",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "typesafe",
+    "jev",
+    "guardrails"
+  ],
+  "engines": {
+    "node": ">=22.6"
   },
   "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "typescript": "5.9.2"
+  }
 }

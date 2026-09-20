@@ -162,22 +162,39 @@ function canonicalize(val) {
     return res;
 }
 export function outputJudgmentKey(input, options) {
-    const isNorm = "toolInput" in input;
-    const state = buildOutputState({
-        tool: input.tool,
-        cwd: input.cwd,
-        tool_input: isNorm ? input.toolInput : input.tool_input,
-        output: input.output,
-        is_error: isNorm ? input.isError : input.is_error,
-        config: !isNorm ? input.config : undefined,
-    });
+    let state;
+    if ("toolInput" in input) {
+        const normalized = input;
+        state = buildOutputState({
+            tool: normalized.tool,
+            cwd: normalized.cwd,
+            tool_input: normalized.toolInput,
+            output: normalized.output,
+            is_error: normalized.isError,
+        });
+    }
+    else if ("config" in input) {
+        const outputInput = input;
+        state = buildOutputState({
+            tool: outputInput.tool,
+            cwd: outputInput.cwd,
+            tool_input: outputInput.tool_input,
+            output: outputInput.output,
+            is_error: outputInput.is_error,
+            config: outputInput.config,
+        });
+    }
+    else {
+        state = input;
+    }
     const canonical = canonicalize({
-        tool: state.tool,
-        tool_input: state.tool_input,
-        is_error: state.is_error,
-        output: state.output,
+        state,
         model: options?.model ?? DEFAULT_MODEL,
         questions: options?.questions ?? OUTPUT_QUESTIONS,
+        thresholds: options?.thresholds ?? {
+            leakThreshold: DEFAULT_LEAK_THRESHOLD,
+            minConfidence: DEFAULT_CLASS_MIN_CONFIDENCE,
+        },
     });
     return crypto
         .createHash("sha256")
@@ -233,15 +250,16 @@ export function evaluateOutput(response, config) {
 export async function judgeOutput(payload, options) {
     const normalized = normalizeToolOutput(payload);
     const store = options?.sessionStore;
-    // Duplicate tool_use_id suppression
+    let claimedToolUseId;
     if (store && normalized.toolUseId) {
-        const seen = await store.hasSeenToolUseId(normalized.toolUseId);
-        if (seen) {
+        const claimed = await store.claimToolUseId(normalized.toolUseId);
+        if (!claimed) {
             const last = await store.getLastVerdict("output");
-            if (last && typeof last === "object") {
+            if (last && typeof last === "object")
                 return last;
-            }
+            throw new Error("Duplicate output judgment is already in progress");
         }
+        claimedToolUseId = normalized.toolUseId;
     }
     const askFn = options?.askJevFn ?? askJev;
     const config = options?.config;
@@ -260,24 +278,30 @@ export async function judgeOutput(payload, options) {
             }
             : undefined,
     });
-    const response = await askFn({
-        model: config?.model ?? DEFAULT_MODEL,
-        state: boundedState,
-        questions: OUTPUT_QUESTIONS,
-        apiKey: config?.apiKey,
-        endpoint: config?.endpoint,
-        timeoutMs: config?.timeoutMs,
-        retries: config?.retries,
-        signal: options?.signal,
-    });
+    let response;
+    try {
+        response = await askFn({
+            model: config?.model ?? DEFAULT_MODEL,
+            state: boundedState,
+            questions: OUTPUT_QUESTIONS,
+            apiKey: config?.apiKey,
+            endpoint: config?.endpoint,
+            timeoutMs: config?.timeoutMs,
+            retries: config?.retries,
+            signal: options?.signal,
+        });
+    }
+    catch (error) {
+        if (store && claimedToolUseId) {
+            await store.releaseToolUseId(claimedToolUseId).catch(() => { });
+        }
+        throw error;
+    }
     const verdict = evaluateOutput(response, config);
     if (verdict.leaksSecret && normalized.toolResponse) {
         verdict.updatedToolOutput = redactBashOutput(normalized.toolResponse);
     }
     if (store) {
-        if (normalized.toolUseId) {
-            await store.recordToolUseId(normalized.toolUseId);
-        }
         await store.setLastVerdict("output", verdict);
     }
     return verdict;

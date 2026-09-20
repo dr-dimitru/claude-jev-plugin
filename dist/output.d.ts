@@ -95,9 +95,13 @@ export interface NormalizedOutput {
 export declare function normalizeToolOutput(payload: RawOutputPayload): NormalizedOutput;
 export declare function isRecognizedBashResponse(toolResponse: unknown): boolean;
 export declare function redactBashOutput(toolResponse: unknown): unknown;
-export declare function outputJudgmentKey(input: NormalizedOutput | OutputInput, options?: {
+export declare function outputJudgmentKey(input: NormalizedOutput | OutputInput | Record<string, unknown>, options?: {
     model?: string;
     questions?: unknown;
+    thresholds?: {
+        leakThreshold: number;
+        minConfidence: number;
+    };
 }): string;
 export declare const outputKey: typeof outputJudgmentKey;
 export interface OutputVerdict {

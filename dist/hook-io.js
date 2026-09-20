@@ -82,14 +82,18 @@ export async function readHookInput(stream = process.stdin, options) {
  */
 export function sessionStore(options) {
     const { sessionId, agentId, scratchpadDir, homeDir } = options;
+    const env = options.env ?? process.env;
     const maxRecordBytes = options.maxRecordBytes ?? DEFAULT_MAX_SESSION_RECORD_BYTES;
     // Determine safe base directory
     let baseDir;
     if (scratchpadDir && scratchpadDir.trim().length > 0) {
         baseDir = path.resolve(scratchpadDir.trim());
     }
+    else if (env.CLAUDE_PLUGIN_DATA?.trim()) {
+        baseDir = path.join(path.resolve(env.CLAUDE_PLUGIN_DATA.trim()), "sessions");
+    }
     else {
-        const userHome = homeDir ?? process.env.HOME ?? os.homedir();
+        const userHome = homeDir ?? env.HOME ?? os.homedir();
         baseDir = path.join(userHome, ".cache", "claude-jev");
     }
     // Hash session identifier to prevent path traversal and ensure privacy
@@ -132,34 +136,28 @@ export function sessionStore(options) {
             return null;
         }
     }
-    async function write(data) {
-        ensureDir();
-        const existing = (await read()) ?? {
-            sessionIdHash: hashedName,
-            updatedAt: Date.now(),
-        };
-        const record = {
-            ...existing,
-            ...data,
-            sessionIdHash: hashedName,
-            updatedAt: Date.now(),
-        };
-        // Keep bounded: prune seenToolUseIds if too many
+    const lockPath = `${filePath}.lock`;
+    function prepareRecord(record) {
         if (record.seenToolUseIds && record.seenToolUseIds.length > 100) {
             record.seenToolUseIds = record.seenToolUseIds.slice(-100);
         }
         let serialized = JSON.stringify(record, null, 2);
         if (Buffer.byteLength(serialized, "utf-8") > maxRecordBytes) {
-            // Bound cache metadata and prompt if oversized
-            if (record.cacheMetadata) {
+            if (record.cacheMetadata)
                 record.cacheMetadata = {};
-            }
             if (record.seenToolUseIds && record.seenToolUseIds.length > 20) {
                 record.seenToolUseIds = record.seenToolUseIds.slice(-20);
             }
             serialized = JSON.stringify(record, null, 2);
         }
-        // Atomic write via temp file + rename
+        if (Buffer.byteLength(serialized, "utf-8") > maxRecordBytes) {
+            throw new Error("Session record exceeds maximum size");
+        }
+        return serialized;
+    }
+    async function writeRecord(record) {
+        ensureDir();
+        const serialized = prepareRecord(record);
         const randomSuffix = crypto.randomBytes(6).toString("hex");
         const tempFile = `${filePath}.${Date.now()}.${randomSuffix}.tmp`;
         try {
@@ -170,31 +168,89 @@ export function sessionStore(options) {
             await fs.promises.rename(tempFile, filePath);
         }
         catch (err) {
-            try {
-                if (fs.existsSync(tempFile)) {
-                    await fs.promises.unlink(tempFile);
-                }
-            }
-            catch {
-                // ignore unlink error
-            }
+            await fs.promises.unlink(tempFile).catch(() => { });
             throw err;
         }
     }
+    async function withMutationLock(operation) {
+        ensureDir();
+        const startedAt = Date.now();
+        const ownerToken = crypto.randomBytes(16).toString("hex");
+        while (true) {
+            let handle;
+            try {
+                handle = await fs.promises.open(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600);
+                await handle.writeFile(JSON.stringify({ ownerToken, pid: process.pid, createdAt: Date.now() }), "utf-8");
+                await handle.close();
+                handle = undefined;
+                break;
+            }
+            catch (error) {
+                if (handle)
+                    await handle.close().catch(() => { });
+                if (error?.code !== "EEXIST")
+                    throw error;
+                try {
+                    const stat = await fs.promises.stat(lockPath);
+                    if (Date.now() - stat.mtimeMs > 5000) {
+                        await fs.promises.unlink(lockPath).catch(() => { });
+                        continue;
+                    }
+                }
+                catch {
+                    continue;
+                }
+                if (Date.now() - startedAt >= 2000) {
+                    throw new Error("Session state lock timeout");
+                }
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+        }
+        try {
+            return await operation();
+        }
+        finally {
+            try {
+                const metadata = JSON.parse(await fs.promises.readFile(lockPath, "utf-8"));
+                if (metadata?.ownerToken === ownerToken) {
+                    await fs.promises.unlink(lockPath).catch(() => { });
+                }
+            }
+            catch {
+                // A missing or replaced lock is not ours to remove.
+            }
+        }
+    }
+    async function write(data) {
+        await withMutationLock(async () => {
+            const existing = (await read()) ?? {
+                sessionIdHash: hashedName,
+                updatedAt: Date.now(),
+            };
+            await writeRecord({
+                ...existing,
+                ...data,
+                sessionIdHash: hashedName,
+                updatedAt: Date.now(),
+            });
+        });
+    }
     async function update(updater) {
-        const current = (await read()) ?? {
-            sessionIdHash: hashedName,
-            updatedAt: Date.now(),
-        };
-        const updated = updater(current);
-        const merged = {
-            ...current,
-            ...updated,
-            sessionIdHash: hashedName,
-            updatedAt: Date.now(),
-        };
-        await write(merged);
-        return merged;
+        return withMutationLock(async () => {
+            const current = (await read()) ?? {
+                sessionIdHash: hashedName,
+                updatedAt: Date.now(),
+            };
+            const updated = updater(current);
+            const merged = {
+                ...current,
+                ...updated,
+                sessionIdHash: hashedName,
+                updatedAt: Date.now(),
+            };
+            await writeRecord(merged);
+            return merged;
+        });
     }
     async function getPrompt() {
         const record = await read();
@@ -203,7 +259,7 @@ export function sessionStore(options) {
     async function setPrompt(prompt) {
         const codePoints = Array.from(prompt);
         const bounded = codePoints.length > MAX_STORED_PROMPT_CHARS
-            ? codePoints.slice(-MAX_STORED_PROMPT_CHARS).join("")
+            ? codePoints.slice(0, MAX_STORED_PROMPT_CHARS).join("")
             : prompt;
         await update((current) => ({
             ...current,
@@ -243,17 +299,32 @@ export function sessionStore(options) {
         const record = await read();
         return record?.seenToolUseIds?.includes(toolUseId) ?? false;
     }
-    async function recordToolUseId(toolUseId) {
-        await update((current) => {
-            const existing = current.seenToolUseIds ?? [];
-            if (existing.includes(toolUseId)) {
-                return current;
-            }
-            return {
-                ...current,
-                seenToolUseIds: [...existing, toolUseId],
+    async function claimToolUseId(toolUseId) {
+        return withMutationLock(async () => {
+            const current = (await read()) ?? {
+                sessionIdHash: hashedName,
+                updatedAt: Date.now(),
             };
+            const existing = current.seenToolUseIds ?? [];
+            if (existing.includes(toolUseId))
+                return false;
+            await writeRecord({
+                ...current,
+                seenToolUseIds: [...existing, toolUseId].slice(-100),
+                sessionIdHash: hashedName,
+                updatedAt: Date.now(),
+            });
+            return true;
         });
+    }
+    async function releaseToolUseId(toolUseId) {
+        await update((current) => ({
+            ...current,
+            seenToolUseIds: (current.seenToolUseIds ?? []).filter(id => id !== toolUseId),
+        }));
+    }
+    async function recordToolUseId(toolUseId) {
+        await claimToolUseId(toolUseId);
     }
     async function getCacheMetadata(key) {
         const record = await read();
@@ -280,6 +351,8 @@ export function sessionStore(options) {
         getLastVerdict,
         setLastVerdict,
         hasSeenToolUseId,
+        claimToolUseId,
+        releaseToolUseId,
         recordToolUseId,
         getCacheMetadata,
         setCacheMetadata,

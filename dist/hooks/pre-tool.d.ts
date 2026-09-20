@@ -29,10 +29,6 @@ export interface PreToolPayload {
     transcript_path?: string;
     cwd: string;
     permission_mode?: string;
-    prompt_host?: boolean;
-    has_ui?: boolean;
-    has_prompt_host?: boolean;
-    headless?: boolean;
     hook_event_name?: string;
     tool_name?: string;
     tool?: string;
@@ -42,6 +38,5 @@ export interface PreToolPayload {
     agent_id?: string;
     [key: string]: unknown;
 }
-export declare function normalizeToolName(raw?: unknown): string | undefined;
-export declare function isPromptHostAvailable(payload: Record<string, unknown>): boolean;
+export declare function isPromptHostAvailable(payload: Record<string, unknown>): false | undefined;
 export declare function runPreTool(rawPayload?: unknown, options?: PreToolOptions): Promise<PreToolOutput | null>;

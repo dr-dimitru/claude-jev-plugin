@@ -78,30 +78,39 @@ function readJsonFileSync(filePath) {
         return null;
     }
 }
-function mergeConfigLayer(target, raw, baseDir) {
+function mergeConfigLayer(target, raw, options) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
         return;
     }
     const obj = raw;
-    if (typeof obj.model === "string" && obj.model.trim().length > 0) {
+    if (options.allowTransport &&
+        typeof obj.model === "string" &&
+        obj.model.trim().length > 0) {
         target.model = obj.model.trim();
     }
-    if (typeof obj.endpoint === "string" && obj.endpoint.trim().length > 0) {
+    if (options.allowTransport &&
+        typeof obj.endpoint === "string" &&
+        obj.endpoint.trim().length > 0) {
         target.endpoint = obj.endpoint.trim();
     }
-    if (typeof obj.timeoutMs === "number" && Number.isFinite(obj.timeoutMs) && obj.timeoutMs > 0) {
+    if (options.allowTransport &&
+        typeof obj.timeoutMs === "number" &&
+        Number.isFinite(obj.timeoutMs) &&
+        obj.timeoutMs > 0) {
         target.timeoutMs = Math.round(obj.timeoutMs);
     }
-    if (typeof obj.retries === "number" && Number.isFinite(obj.retries) && obj.retries >= 0) {
+    if (options.allowTransport &&
+        typeof obj.retries === "number" &&
+        Number.isFinite(obj.retries) &&
+        obj.retries >= 0) {
         target.retries = Math.round(obj.retries);
     }
     if (typeof obj.maxStateChars === "number" && Number.isFinite(obj.maxStateChars) && obj.maxStateChars > 0) {
         target.maxStateChars = Math.round(obj.maxStateChars);
     }
-    if (typeof obj.apiKey === "string" && obj.apiKey.trim().length > 0) {
-        target.apiKey = obj.apiKey.trim();
-    }
-    if (typeof obj.apiKeyFile === "string" && obj.apiKeyFile.trim().length > 0) {
+    if (options.allowSecretSources &&
+        typeof obj.apiKeyFile === "string" &&
+        obj.apiKeyFile.trim().length > 0) {
         target.apiKeyFile = obj.apiKeyFile.trim();
     }
     if (obj.gate && typeof obj.gate === "object" && !Array.isArray(obj.gate)) {
@@ -175,7 +184,10 @@ export function loadConfig(cwd = process.cwd(), options) {
         const globalPath = path.join(homeDir, ".claude", "claude-jev.json");
         const globalJson = readJsonFileSync(globalPath);
         if (globalJson) {
-            mergeConfigLayer(config, globalJson, homeDir);
+            mergeConfigLayer(config, globalJson, {
+                allowTransport: true,
+                allowSecretSources: true,
+            });
         }
     }
     // 2. Project config (<cwd>/.claude/claude-jev.json)
@@ -183,7 +195,10 @@ export function loadConfig(cwd = process.cwd(), options) {
         const projectPath = path.join(cwd, ".claude", "claude-jev.json");
         const projectJson = readJsonFileSync(projectPath);
         if (projectJson) {
-            mergeConfigLayer(config, projectJson, cwd);
+            mergeConfigLayer(config, projectJson, {
+                allowTransport: false,
+                allowSecretSources: false,
+            });
         }
     }
     // 3. Optional apiKeyFile resolution if apiKey not already resolved from env
@@ -191,7 +206,7 @@ export function loadConfig(cwd = process.cwd(), options) {
         try {
             const resolvedKeyPath = path.isAbsolute(config.apiKeyFile)
                 ? config.apiKeyFile
-                : path.resolve(cwd, config.apiKeyFile);
+                : path.resolve(homeDir, ".claude", config.apiKeyFile);
             if (fs.existsSync(resolvedKeyPath)) {
                 const fileContent = fs.readFileSync(resolvedKeyPath, "utf-8").trim();
                 if (fileContent.length > 0) {

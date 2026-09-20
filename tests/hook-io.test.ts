@@ -126,6 +126,20 @@ describe("hook-io", () => {
       assert.ok(sessionPath.startsWith(path.resolve(expectedCacheDir)));
     });
 
+    it("uses CLAUDE_PLUGIN_DATA before the home cache fallback", () => {
+      const pluginDataDir = path.join(tempDir, "plugin-data");
+      const store = sessionStore({
+        sessionId: "plugin-data",
+        env: { CLAUDE_PLUGIN_DATA: pluginDataDir },
+        homeDir: fakeHomeDir,
+      });
+      assert.ok(
+        store.getSessionPath().startsWith(
+          path.join(path.resolve(pluginDataDir), "sessions") + path.sep
+        )
+      );
+    });
+
     it("prevents path traversal by hashing sessionId and agentId", async () => {
       const store = sessionStore({
         sessionId: "../../etc/passwd",
