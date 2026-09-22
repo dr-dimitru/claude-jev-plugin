@@ -1,6 +1,6 @@
 {
   "name": "claude-jev",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Semantic guardrails and output verification for Claude Code powered by TypeSafe Jev",
   "type": "module",
   "main": "dist/client.js",

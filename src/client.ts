@@ -205,6 +205,8 @@ export function validateEndpoint(endpoint: string): string {
 
 // --- Response Validation ---
 
+export const PROBABILITY_SUM_TOLERANCE = 0.05;
+
 function validateProbabilities(
   probs: unknown,
   qName: string,
@@ -241,13 +243,21 @@ function validateProbabilities(
     }
     total += v;
   }
-  if (Math.abs(total - 1) > 0.001) {
+  // TypeSafe rounds each probability to two decimals, so a six-way
+  // distribution legitimately sums to 0.97..1.03. Accept that drift and
+  // renormalize; anything wider is a malformed distribution.
+  if (Math.abs(total - 1) > PROBABILITY_SUM_TOLERANCE) {
     throw new JevError(
       `Malformed answer for question '${qName}': probabilities must sum to 1`,
       { code: "MALFORMED_RESPONSE", retryable: false }
     );
   }
-  return obj as Record<string, number>;
+  if (total === 1) return obj as Record<string, number>;
+  const normalized: Record<string, number> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    normalized[k] = (v as number) / total;
+  }
+  return normalized;
 }
 
 function validateAnswer(

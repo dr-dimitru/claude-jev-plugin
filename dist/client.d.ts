@@ -107,6 +107,7 @@ export declare function isRetryableStatus(status: number): boolean;
  * Validates a TypeSafe endpoint before an Authorization header is constructed.
  */
 export declare function validateEndpoint(endpoint: string): string;
+export declare const PROBABILITY_SUM_TOLERANCE = 0.05;
 /**
  * Strictly validates the wire response shape from TypeSafe Jev.
  */

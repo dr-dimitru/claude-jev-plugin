@@ -662,6 +662,48 @@ describe("TypeSafe Jev Client", () => {
       }
     });
 
+    it("accepts a rounded probability map and renormalizes it", () => {
+      const question: Record<string, JevQuestion> = {
+        q: {
+          type: "choice",
+          instructions: "Choose",
+          criteria: { a: "A", b: "B", c: "C" },
+        },
+      };
+      for (const probabilities of [
+        { a: 0.87, b: 0.08, c: 0.04 }, // 0.99, two-decimal rounding
+        { a: 0.9, b: 0.08, c: 0.03 }, // 1.01
+        { a: 0.5, b: 0.5, c: 0 },
+      ]) {
+        const res = validateJevResponse(
+          {
+            model: "jev-1.13.0",
+            answers: { q: { type: "choice", choice: "a", probabilities, confidence: 0.9 } },
+            usage,
+          },
+          question
+        );
+        const answer = res.answers.q as { probabilities: Record<string, number> };
+        const total = Object.values(answer.probabilities).reduce((s, v) => s + v, 0);
+        assert.ok(Math.abs(total - 1) < 1e-9, `renormalized sum ${total}`);
+        assert.equal(Object.keys(answer.probabilities).length, 3);
+      }
+      assert.throws(
+        () =>
+          validateJevResponse(
+            {
+              model: "jev-1.13.0",
+              answers: {
+                q: { type: "choice", choice: "a", probabilities: { a: 0.6, b: 0.3, c: 0 }, confidence: 0.9 },
+              },
+              usage,
+            },
+            question
+          ),
+        (error: unknown) => error instanceof JevError && error.code === "MALFORMED_RESPONSE"
+      );
+    });
+
     it("rejects score keys, legends, and values outside declared levels", () => {
       const question: Record<string, JevQuestion> = {
         q: { type: "score", instructions: "Rate", criteria: ["Low", "High"] },
