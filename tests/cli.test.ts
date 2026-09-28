@@ -532,9 +532,10 @@ describe("claude-jev CLI", { concurrency: false }, () => {
     const mockFetchImport = pathToFileURL(
       path.join(REPO_ROOT, "tests", "fixtures", "mock-fetch.mjs")
     ).href;
+    const stateSecret = "PRIVATE_USAGE_ECHO_STATE_6072";
     const state = {
       decision: "Choose the option that fits the stated constraints.",
-      constraints: ["Keep existing user data intact."],
+      constraints: ["Keep existing user data intact.", stateSecret],
     };
     const questions = {
       option_a_fit: {
@@ -553,8 +554,33 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         option_a_fit: { type: "noul", noul: 0.8 },
         option_b_fit: { type: "noul", noul: 0.4 },
       },
-      usage: { input_tokens: 12, output_tokens: 0 },
+      usage: {
+        input_tokens: 12,
+        output_tokens: 0,
+        echoed_state: stateSecret,
+      },
       internal_response_field: "RESPONSE_EXTENSION_SECRET",
+    };
+
+    const inputWithUtf8Bytes = (targetBytes: number) => {
+      const baseQuestions = {
+        ...questions,
+        option_a_fit: { ...questions.option_a_fit, instructions: "" },
+      };
+      const baseInput = JSON.stringify({ state, questions: baseQuestions });
+      const fillBytes = targetBytes - Buffer.byteLength(baseInput, "utf8");
+      const instructions = "é".repeat(Math.floor(fillBytes / 2)) +
+        (fillBytes % 2 === 1 ? "a" : "");
+      const input = JSON.stringify({
+        state,
+        questions: {
+          ...baseQuestions,
+          option_a_fit: { ...baseQuestions.option_a_fit, instructions },
+        },
+      });
+      assert.equal(Buffer.byteLength(input, "utf8"), targetBytes);
+      assert.ok(input.length < targetBytes);
+      return input;
     };
 
     const runMockedAsk = async (
@@ -580,6 +606,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       }
 
       const capturePath = path.join(caseDir, "request.json");
+      const callCountPath = path.join(caseDir, "call-count.txt");
       const result = await runCliAsync(args, {
         cwd,
         input,
@@ -588,6 +615,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
           TYPESAFE_API_KEY: options?.apiKey ?? "test-api-key",
           NODE_OPTIONS: `--import=${mockFetchImport}`,
           CLAUDE_JEV_TEST_CAPTURE: capturePath,
+          CLAUDE_JEV_TEST_CALL_COUNT: callCountPath,
           CLAUDE_JEV_TEST_RESPONSE:
             typeof response === "string" ? response : JSON.stringify(response),
           CLAUDE_JEV_TEST_STATUS: String(options?.status ?? 200),
@@ -596,7 +624,10 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       const request = fs.existsSync(capturePath)
         ? JSON.parse(fs.readFileSync(capturePath, "utf8"))
         : undefined;
-      return { result, request };
+      const callCount = fs.existsSync(callCountPath)
+        ? Number(fs.readFileSync(callCountPath, "utf8"))
+        : 0;
+      return { result, request, callCount };
     };
 
     it("lists ask in help output", () => {
@@ -608,7 +639,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
 
     it("sends configured model and all questions once, then prints only validated fields", async () => {
       const selectedModel = "provider/custom-model-v2";
-      const { result, request } = await runMockedAsk(
+      const { result, request, callCount } = await runMockedAsk(
         ["ask"],
         validInput,
         validResponse,
@@ -616,6 +647,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       );
 
       assert.equal(result.status, 0, result.stderr);
+      assert.equal(callCount, 1);
       assert.deepEqual(request, {
         model: selectedModel,
         state,
@@ -625,15 +657,16 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       assert.deepEqual(Object.keys(output).sort(), ["answers", "model", "usage"]);
       assert.deepEqual(output, {
         model: validResponse.model,
-        usage: validResponse.usage,
+        usage: { input_tokens: 12, output_tokens: 0 },
         answers: validResponse.answers,
       });
       assert.equal(result.stdout.includes("RESPONSE_EXTENSION_SECRET"), false);
+      assert.equal(result.stdout.includes(stateSecret), false);
       assert.equal(result.stderr, "");
     });
 
     it("fails safely when the API key is missing", async () => {
-      const { result, request } = await runMockedAsk(
+      const { result, request, callCount } = await runMockedAsk(
         ["ask"],
         validInput,
         validResponse,
@@ -643,11 +676,12 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       assert.notEqual(result.status, 0);
       assert.match(result.stderr + result.stdout, /missing.*api.*key/i);
       assert.equal(request, undefined);
+      assert.equal(callCount, 0);
     });
 
     it("rejects invalid input without making a network request or echoing it", async () => {
       const privateState = "PRIVATE_DECISION_STATE_3128";
-      const { result, request } = await runMockedAsk(
+      const { result, request, callCount } = await runMockedAsk(
         ["ask"],
         `{"state":"${privateState}"`,
         validResponse
@@ -655,23 +689,70 @@ describe("claude-jev CLI", { concurrency: false }, () => {
 
       assert.notEqual(result.status, 0);
       assert.equal(request, undefined);
+      assert.equal(callCount, 0);
       assert.match(result.stderr + result.stdout, /invalid decision request/i);
       assert.equal((result.stdout + result.stderr).includes(privateState), false);
     });
 
-    it("rejects streamed input above 64 KiB without making a network request", async () => {
-      const input = `{"state":"${"é".repeat(40_000)}","questions":{}}`;
-      const { result, request } = await runMockedAsk(["ask"], input);
+    it("accepts exactly 64 KiB of UTF-8 input and rejects one byte above before a request", async () => {
+      const atLimit = await runMockedAsk(["ask"], inputWithUtf8Bytes(64 * 1024));
+      assert.equal(atLimit.result.status, 0, atLimit.result.stderr);
+      assert.equal(atLimit.callCount, 1);
+      assert.ok(JSON.parse(atLimit.result.stdout).answers.option_a_fit);
+      assert.equal(Object.keys(atLimit.request.questions).length, 2);
 
-      assert.notEqual(result.status, 0);
-      assert.equal(request, undefined);
-      assert.match(result.stderr + result.stdout, /64\s*KiB|too large/i);
+      const aboveLimit = await runMockedAsk(["ask"], inputWithUtf8Bytes(64 * 1024 + 1));
+      assert.notEqual(aboveLimit.result.status, 0);
+      assert.equal(aboveLimit.request, undefined);
+      assert.equal(aboveLimit.callCount, 0);
+      assert.match(aboveLimit.result.stderr + aboveLimit.result.stdout, /64\s*KiB|too large/i);
+    });
+
+    it("accepts 32 questions and rejects 33 before a request", async () => {
+      const questionsAtLimit = Object.fromEntries(
+        Array.from({ length: 32 }, (_, index) => [
+          `q${index}`,
+          { type: "noul", instructions: `Evaluate question ${index}.` },
+        ])
+      );
+      const questionsAboveLimit = Object.fromEntries(
+        Array.from({ length: 33 }, (_, index) => [
+          `q${index}`,
+          { type: "noul", instructions: `Evaluate question ${index}.` },
+        ])
+      );
+      const answers = Object.fromEntries(
+        Array.from({ length: 32 }, (_, index) => [`q${index}`, { type: "noul", noul: 0.5 }])
+      );
+      const response = {
+        model: "jev-latest",
+        answers,
+        usage: { input_tokens: 1, output_tokens: 0 },
+      };
+
+      const atLimit = await runMockedAsk(
+        ["ask"],
+        JSON.stringify({ state: { decision: "Choose." }, questions: questionsAtLimit }),
+        response
+      );
+      assert.equal(atLimit.result.status, 0, atLimit.result.stderr);
+      assert.equal(atLimit.callCount, 1);
+      assert.equal(Object.keys(atLimit.request.questions).length, 32);
+
+      const aboveLimit = await runMockedAsk(
+        ["ask"],
+        JSON.stringify({ state: { decision: "Choose." }, questions: questionsAboveLimit }),
+        response
+      );
+      assert.notEqual(aboveLimit.result.status, 0);
+      assert.equal(aboveLimit.request, undefined);
+      assert.equal(aboveLimit.callCount, 0);
     });
 
     it("does not fall back to Jev when the configured model fails", async () => {
       const selectedModel = "provider/unavailable-model";
       const privateState = "PRIVATE_MODEL_FAILURE_STATE_4481";
-      const { result, request } = await runMockedAsk(
+      const { result, request, callCount } = await runMockedAsk(
         ["ask"],
         JSON.stringify({ state: { note: privateState }, questions }),
         `Upstream rejected request containing ${privateState}`,
@@ -680,6 +761,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
 
       assert.notEqual(result.status, 0);
       assert.ok(request, "ask must send selected-model request");
+      assert.equal(callCount, 1);
       assert.equal(request.model, selectedModel);
       assert.match(result.stderr, /404/);
       assert.equal((result.stdout + result.stderr).includes(privateState), false);
@@ -688,7 +770,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
 
     it("reports malformed responses without echoing state or response fields", async () => {
       const privateState = "PRIVATE_MALFORMED_RESPONSE_STATE_7791";
-      const { result, request } = await runMockedAsk(
+      const { result, request, callCount } = await runMockedAsk(
         ["ask"],
         JSON.stringify({ state: { note: privateState }, questions }),
         {
@@ -701,6 +783,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
 
       assert.notEqual(result.status, 0);
       assert.ok(request, "ask must send request before response validation");
+      assert.equal(callCount, 1);
       assert.equal((result.stdout + result.stderr).includes(privateState), false);
       assert.equal(result.stderr.includes("echoed_state"), false);
     });
@@ -713,11 +796,12 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         ["ask", "--endpoint"],
         ["ask", "unexpected-position"],
       ]) {
-        const { result, request } = await runMockedAsk(args);
+        const { result, request, callCount } = await runMockedAsk(args);
 
         assert.notEqual(result.status, 0, args.join(" "));
         assert.match(result.stderr + result.stdout, /ask command.*does not accept/i);
         assert.equal(request, undefined, args.join(" "));
+        assert.equal(callCount, 0, args.join(" "));
       }
     });
   });
@@ -877,6 +961,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
 
       for (const [pattern, label] of [
         [/claude-jev ask/i, "CLI command"],
+        [/node\s+["']\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/claude-jev["']\s+ask/i, "bundled CLI path"],
         [/follow-up/i, "focused user follow-up"],
         [/bounded/i, "bounded context"],
         [/sensitive/i, "sensitive-data handling"],

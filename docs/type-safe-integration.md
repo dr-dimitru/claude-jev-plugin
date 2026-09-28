@@ -172,7 +172,9 @@ claude-jev ask <<'JSON'
 JSON
 ```
 
-Each question can be Noul, Score, or Choice. The command returns JSON with the resolved `model`, optional `usage`, and validated `answers`. TypeSafe's current limits are 64 KiB for the complete UTF-8 request and 32 questions. The state limit comes from trusted `maxStateChars` configuration, which defaults to 8,000 characters. Score criteria require 2 to 10 levels. Choice criteria allow 1 to 255 options.
+Each question can be Noul, Score, or Choice. The command returns JSON with the resolved `model`, `usage`, and validated `answers`. `claude-jev ask` enforces local limits of 64 KiB for the complete UTF-8 input and 32 questions. State is limited by `maxStateChars`, which defaults to 8,000 characters and can be set in global or project configuration. TypeSafe's API requires 2 to 10 Score levels and allows 1 to 255 Choice options.
+
+The current TypeSafe response contract requires a `usage` object. The CLI currently rejects responses without it.
 
 The command uses trusted model, endpoint, key, deadline, and retry settings. It does not accept per-request `--model` or `--endpoint` values. State and questions leave the machine and may incur API cost. Do not send conversation history. Ask before including sensitive details. The output is advisory evidence, not a fact, consent, or tool permission. An unavailable model or invalid response produces an error without automatic fallback or fabricated answers.
 

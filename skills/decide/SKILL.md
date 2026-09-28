@@ -17,10 +17,10 @@ Before sending a request, explain that its state and questions go to the configu
 
 Create one minimal `state` value and one or more independent questions about that same state. `claude-jev ask` sends all questions in one request. Input must stay within 64 KiB, serialized state must stay within configured `maxStateChars` (8,000 by default), and a request can contain at most 32 questions.
 
-Use Noul for a yes or no probability, Score for an ordered rubric, and Choice for one option among named categories. Example:
+Use Noul for a yes or no probability, Score for an ordered rubric, and Choice for one option among named categories. Run the bundled `claude-jev ask` CLI through the plugin root so it works without a separate PATH install:
 
 ```bash
-claude-jev ask <<'JSON'
+node "${CLAUDE_PLUGIN_ROOT}/bin/claude-jev" ask <<'JSON'
 {
   "state": {
     "decision": "Which option best fits the user's constraints?",
@@ -54,6 +54,6 @@ The command uses the model, endpoint, key, deadline, and retry settings from tru
 
 ## Explain the result
 
-The command writes JSON with the resolved model, usage when supplied, and validated answers. Explain the useful answer fields and uncertainty. Give Claude's own recommendation against the user's goals and constraints.
+The command writes JSON with the resolved model, usage, and validated answers. Explain the useful answer fields and uncertainty. Give Claude's own recommendation against the user's goals and constraints.
 
 Treat TypeSafe results as advisory evidence. They are not facts, user consent, or permission to use a tool. If the request fails or returns an invalid answer, report that no TypeSafe judgment is available. Continue with ordinary reasoning, do not call another model automatically, and do not invent answers.

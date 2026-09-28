@@ -320,7 +320,14 @@ Session:
         });
         const output = {
           model: response.model,
-          ...(response.usage === undefined ? {} : { usage: response.usage }),
+          ...(response.usage === undefined
+            ? {}
+            : {
+                usage: {
+                  input_tokens: response.usage.input_tokens,
+                  output_tokens: response.usage.output_tokens,
+                },
+              }),
           answers: response.answers,
         };
         process.stdout.write(`${JSON.stringify(output)}\n`);

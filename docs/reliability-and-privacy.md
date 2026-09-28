@@ -175,7 +175,7 @@ Secret detection has an unavoidable privacy tradeoff: bounded output may already
 
 ## Custom decision requests
 
-`claude-jev ask` sends only its `state` and `questions` fields to the configured TypeSafe endpoint. It does not send conversation history. The complete JSON input is limited to 64 KiB, state is limited by `maxStateChars` (8,000 by default), and each request can contain up to 32 questions. TypeSafe API usage may incur cost.
+`claude-jev ask` sends only its `state` and `questions` fields to the configured TypeSafe endpoint. It does not send conversation history. The command enforces local limits of 64 KiB for complete JSON input, the configured `maxStateChars` value (8,000 by default), and 32 questions. Global or project configuration can set `maxStateChars`. TypeSafe API usage may incur cost.
 
 The `/claude-jev:decide` skill asks before sending sensitive details. TypeSafe results remain advisory. An unavailable model or invalid response does not count as a clear result, and the command does not switch models automatically. The skill reports that no TypeSafe judgment is available and continues with Claude's ordinary reasoning.
 

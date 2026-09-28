@@ -235,7 +235,7 @@ Automatic hooks do not depend on skill invocation. Main manual operation is:
 claude-jev check "text or command to judge"
 ```
 
-`claude-jev ask` reads one JSON object from stdin with `state` and `questions` fields. It uses trusted user configuration and returns only the resolved model, usage when supplied, and validated answers. One request accepts up to 32 questions, the full JSON input is limited to 64 KiB, and state is limited by `maxStateChars` (8,000 by default). The request sends state and questions to TypeSafe and may incur API cost. Do not send conversation history. Ask before including sensitive details.
+`claude-jev ask` reads one JSON object from stdin with `state` and `questions` fields. It uses trusted user configuration and returns the resolved model, usage, and validated answers. The command accepts up to 32 questions, limits JSON input to 64 KiB, and applies configured `maxStateChars` to state (8,000 by default). The request sends state and questions to TypeSafe and may incur API cost. Do not send conversation history. Ask before including sensitive details.
 
 The result is advisory evidence, not fact, consent, or permission to use a tool. If TypeSafe fails or returns an invalid answer, `claude-jev ask` exits with an error; it does not fabricate an answer or switch models.
 
