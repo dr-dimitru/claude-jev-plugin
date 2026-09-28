@@ -863,4 +863,41 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       );
     });
   });
+
+  describe("decision skill", () => {
+    const decideSkillPath = path.join(REPO_ROOT, "skills", "decide", "SKILL.md");
+
+    it("has required on-demand workflow and trust boundaries", () => {
+      assert.ok(fs.existsSync(decideSkillPath), "skills/decide/SKILL.md must exist");
+      const content = fs.readFileSync(decideSkillPath, "utf8");
+      assert.ok(content.startsWith("---"), "decision skill needs frontmatter");
+      const frontmatterEnd = content.indexOf("---", 3);
+      assert.ok(frontmatterEnd > 3, "decision skill needs closing frontmatter");
+      assert.match(content.slice(3, frontmatterEnd), /name:\s*decide/i);
+
+      for (const [pattern, label] of [
+        [/claude-jev ask/i, "CLI command"],
+        [/follow-up/i, "focused user follow-up"],
+        [/bounded/i, "bounded context"],
+        [/sensitive/i, "sensitive-data handling"],
+        [/noul/i, "Noul questions"],
+        [/choice/i, "Choice questions"],
+        [/score/i, "Score questions"],
+        [/advisory/i, "advisory-only results"],
+        [/recommendation/i, "Claude's own recommendation"],
+      ]) {
+        assert.match(content, pattern, `Decision skill is missing ${label}`);
+      }
+    });
+
+    it("links the decision skill from Jev skill and README", () => {
+      const jevSkill = fs.readFileSync(SKILL_PATH, "utf8");
+      const readme = fs.readFileSync(path.join(REPO_ROOT, "README.md"), "utf8");
+
+      assert.match(jevSkill, /\.\.\/decide\/SKILL\.md/);
+      assert.match(readme, /\/claude-jev:decide/);
+      assert.ok(readme.includes("docs/type-safe-integration.md"));
+      assert.ok(readme.includes("docs/reliability-and-privacy.md"));
+    });
+  });
 });

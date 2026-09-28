@@ -146,6 +146,36 @@ The trusted global `model` setting defaults to `jev-latest`. Project config cann
 
 TypeSafe's current [model docs](https://docs.typesafe.ai/models) list Jev and its aliases. `GET /v1/models` returns the names available to your account. Before selecting another ID, confirm it there and check that its responses match TypeSafe's documented [System One response contract](https://docs.typesafe.ai/api). This guide lists only the verified Jev default.
 
+## Custom decision requests
+
+Use `claude-jev ask` for Claude-authored questions about one decision. It reads one JSON object from stdin with `state` and `questions` fields. It sends all questions that use the same state in one request.
+
+```bash
+claude-jev ask <<'JSON'
+{
+  "state": {
+    "decision": "Which option best fits the constraints?",
+    "options": ["Option A", "Option B"],
+    "constraints": ["Preserve existing user data."]
+  },
+  "questions": {
+    "best_option": {
+      "type": "choice",
+      "instructions": "Which option best fits the stated constraints?",
+      "criteria": {
+        "option_a": "Choose Option A.",
+        "option_b": "Choose Option B."
+      }
+    }
+  }
+}
+JSON
+```
+
+Each question can be Noul, Score, or Choice. The command returns JSON with the resolved `model`, optional `usage`, and validated `answers`. TypeSafe's current limits are 64 KiB for the complete UTF-8 request and 32 questions. The state limit comes from trusted `maxStateChars` configuration, which defaults to 8,000 characters. Score criteria require 2 to 10 levels. Choice criteria allow 1 to 255 options.
+
+The command uses trusted model, endpoint, key, deadline, and retry settings. It does not accept per-request `--model` or `--endpoint` values. State and questions leave the machine and may incur API cost. Do not send conversation history. Ask before including sensitive details. The output is advisory evidence, not a fact, consent, or tool permission. An unavailable model or invalid response produces an error without automatic fallback or fabricated answers.
+
 ## Question primitives
 
 ### Noul
