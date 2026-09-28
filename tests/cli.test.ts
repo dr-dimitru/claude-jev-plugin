@@ -61,6 +61,9 @@ function runCliAsync(
     const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
     child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.stdin.on("error", (error: { code?: string }) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
     child.on("error", reject);
     child.on("close", (status) =>
       resolve({
@@ -501,6 +504,15 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       assert.match(result.stderr + result.stdout, /missing.*api.*key|TYPESAFE_API_KEY/i);
     });
 
+    it("keeps a missing check endpoint value in existing positional handling", () => {
+      const result = runCli(["check", "--endpoint"], {
+        env: { TYPESAFE_API_KEY: "" },
+      });
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr + result.stdout, /missing.*api.*key/i);
+    });
+
     it("redacts API keys from errors when API fails", async () => {
       const apiKey = "synthetic-key-for-redaction";
       const { result } = await runMockedCheck(
@@ -513,6 +525,200 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       const combined = result.stderr + result.stdout;
       assert.equal(combined.includes(apiKey), false);
       assert.match(combined, /\[REDACTED\]/);
+    });
+  });
+
+  describe("ask command", { concurrency: 1 }, () => {
+    const mockFetchImport = pathToFileURL(
+      path.join(REPO_ROOT, "tests", "fixtures", "mock-fetch.mjs")
+    ).href;
+    const state = {
+      decision: "Choose the option that fits the stated constraints.",
+      constraints: ["Keep existing user data intact."],
+    };
+    const questions = {
+      option_a_fit: {
+        type: "noul",
+        instructions: "Does Option A fit the stated constraints?",
+      },
+      option_b_fit: {
+        type: "noul",
+        instructions: "Does Option B fit the stated constraints?",
+      },
+    };
+    const validInput = JSON.stringify({ state, questions });
+    const validResponse = {
+      model: "provider/custom-model-v2",
+      answers: {
+        option_a_fit: { type: "noul", noul: 0.8 },
+        option_b_fit: { type: "noul", noul: 0.4 },
+      },
+      usage: { input_tokens: 12, output_tokens: 0 },
+      internal_response_field: "RESPONSE_EXTENSION_SECRET",
+    };
+
+    const runMockedAsk = async (
+      args: string[] = ["ask"],
+      input: string = validInput,
+      response: unknown = validResponse,
+      options?: { apiKey?: string; model?: string; status?: number }
+    ) => {
+      const caseDir = fs.mkdtempSync(path.join(tempDir, "ask-case-"));
+      const cwd = path.join(caseDir, "project");
+      const home = path.join(caseDir, "home");
+      fs.mkdirSync(cwd, { recursive: true });
+      fs.mkdirSync(home, { recursive: true });
+
+      if (options?.model !== undefined) {
+        const globalConfigDir = path.join(home, ".claude");
+        fs.mkdirSync(globalConfigDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(globalConfigDir, "claude-jev.json"),
+          JSON.stringify({ model: options.model }),
+          "utf8"
+        );
+      }
+
+      const capturePath = path.join(caseDir, "request.json");
+      const result = await runCliAsync(args, {
+        cwd,
+        input,
+        env: {
+          HOME: home,
+          TYPESAFE_API_KEY: options?.apiKey ?? "test-api-key",
+          NODE_OPTIONS: `--import=${mockFetchImport}`,
+          CLAUDE_JEV_TEST_CAPTURE: capturePath,
+          CLAUDE_JEV_TEST_RESPONSE:
+            typeof response === "string" ? response : JSON.stringify(response),
+          CLAUDE_JEV_TEST_STATUS: String(options?.status ?? 200),
+        },
+      });
+      const request = fs.existsSync(capturePath)
+        ? JSON.parse(fs.readFileSync(capturePath, "utf8"))
+        : undefined;
+      return { result, request };
+    };
+
+    it("lists ask in help output", () => {
+      const result = runCli(["--help"]);
+
+      assert.equal(result.status, 0);
+      assert.match(result.stdout, /claude-jev ask/i);
+    });
+
+    it("sends configured model and all questions once, then prints only validated fields", async () => {
+      const selectedModel = "provider/custom-model-v2";
+      const { result, request } = await runMockedAsk(
+        ["ask"],
+        validInput,
+        validResponse,
+        { model: selectedModel }
+      );
+
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(request, {
+        model: selectedModel,
+        state,
+        questions,
+      });
+      const output = JSON.parse(result.stdout);
+      assert.deepEqual(Object.keys(output).sort(), ["answers", "model", "usage"]);
+      assert.deepEqual(output, {
+        model: validResponse.model,
+        usage: validResponse.usage,
+        answers: validResponse.answers,
+      });
+      assert.equal(result.stdout.includes("RESPONSE_EXTENSION_SECRET"), false);
+      assert.equal(result.stderr, "");
+    });
+
+    it("fails safely when the API key is missing", async () => {
+      const { result, request } = await runMockedAsk(
+        ["ask"],
+        validInput,
+        validResponse,
+        { apiKey: "" }
+      );
+
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr + result.stdout, /missing.*api.*key/i);
+      assert.equal(request, undefined);
+    });
+
+    it("rejects invalid input without making a network request or echoing it", async () => {
+      const privateState = "PRIVATE_DECISION_STATE_3128";
+      const { result, request } = await runMockedAsk(
+        ["ask"],
+        `{"state":"${privateState}"`,
+        validResponse
+      );
+
+      assert.notEqual(result.status, 0);
+      assert.equal(request, undefined);
+      assert.match(result.stderr + result.stdout, /invalid decision request/i);
+      assert.equal((result.stdout + result.stderr).includes(privateState), false);
+    });
+
+    it("rejects streamed input above 64 KiB without making a network request", async () => {
+      const input = `{"state":"${"é".repeat(40_000)}","questions":{}}`;
+      const { result, request } = await runMockedAsk(["ask"], input);
+
+      assert.notEqual(result.status, 0);
+      assert.equal(request, undefined);
+      assert.match(result.stderr + result.stdout, /64\s*KiB|too large/i);
+    });
+
+    it("does not fall back to Jev when the configured model fails", async () => {
+      const selectedModel = "provider/unavailable-model";
+      const privateState = "PRIVATE_MODEL_FAILURE_STATE_4481";
+      const { result, request } = await runMockedAsk(
+        ["ask"],
+        JSON.stringify({ state: { note: privateState }, questions }),
+        `Upstream rejected request containing ${privateState}`,
+        { model: selectedModel, status: 404 }
+      );
+
+      assert.notEqual(result.status, 0);
+      assert.ok(request, "ask must send selected-model request");
+      assert.equal(request.model, selectedModel);
+      assert.match(result.stderr, /404/);
+      assert.equal((result.stdout + result.stderr).includes(privateState), false);
+      assert.equal(result.stderr.includes("Upstream rejected"), false);
+    });
+
+    it("reports malformed responses without echoing state or response fields", async () => {
+      const privateState = "PRIVATE_MALFORMED_RESPONSE_STATE_7791";
+      const { result, request } = await runMockedAsk(
+        ["ask"],
+        JSON.stringify({ state: { note: privateState }, questions }),
+        {
+          model: "provider/custom-model-v2",
+          answers: { option_a_fit: { type: "noul", noul: "invalid" } },
+          usage: { input_tokens: 1, output_tokens: 0 },
+          echoed_state: privateState,
+        }
+      );
+
+      assert.notEqual(result.status, 0);
+      assert.ok(request, "ask must send request before response validation");
+      assert.equal((result.stdout + result.stderr).includes(privateState), false);
+      assert.equal(result.stderr.includes("echoed_state"), false);
+    });
+
+    it("rejects per-request model, endpoint, and positional overrides", async () => {
+      for (const args of [
+        ["ask", "--model", "jev-latest"],
+        ["ask", "--model"],
+        ["ask", "--endpoint", "https://typesafe.test/v1/systemone"],
+        ["ask", "--endpoint"],
+        ["ask", "unexpected-position"],
+      ]) {
+        const { result, request } = await runMockedAsk(args);
+
+        assert.notEqual(result.status, 0, args.join(" "));
+        assert.match(result.stderr + result.stdout, /ask command.*does not accept/i);
+        assert.equal(request, undefined, args.join(" "));
+      }
     });
   });
 

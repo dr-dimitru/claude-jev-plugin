@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
 import * as path from "node:path";
-import { askTypeSafe, redact, boundText } from "../dist/client.js";
+import { askTypeSafe, TypeSafeError, redact, boundText } from "../dist/client.js";
+import {
+  DecisionInputError,
+  MAX_DECISION_INPUT_BYTES,
+  parseDecisionRequest,
+} from "../dist/decision.js";
 import { loadConfig } from "../dist/config.js";
 import { buildGateState } from "../dist/state.js";
 import { sessionStore } from "../dist/hook-io.js";
@@ -13,6 +18,8 @@ function parseArgs(rawArgs) {
   let scratchpadDir;
   let cwd;
   let endpoint;
+  let endpointProvided = false;
+  let modelProvided = false;
   let help = false;
 
   for (let i = 0; i < rawArgs.length; i++) {
@@ -32,10 +39,28 @@ function parseArgs(rawArgs) {
       cwd = rawArgs[++i];
     } else if (arg.startsWith("--cwd=")) {
       cwd = arg.slice("--cwd=".length);
-    } else if (arg === "--endpoint" && i + 1 < rawArgs.length) {
-      endpoint = rawArgs[++i];
+    } else if (
+      arg === "--endpoint" &&
+      i + 1 >= rawArgs.length &&
+      positionals[0]?.toLowerCase() === "check"
+    ) {
+      positionals.push(arg);
+    } else if (arg === "--endpoint") {
+      endpointProvided = true;
+      if (i + 1 < rawArgs.length) endpoint = rawArgs[++i];
     } else if (arg.startsWith("--endpoint=")) {
+      endpointProvided = true;
       endpoint = arg.slice("--endpoint=".length);
+    } else if (arg === "--model") {
+      modelProvided = true;
+      if (positionals[0]?.toLowerCase() === "check") {
+        positionals.push(arg);
+      } else if (positionals[0]?.toLowerCase() === "ask" && i + 1 < rawArgs.length) {
+        i++;
+      }
+    } else if (arg.startsWith("--model=")) {
+      modelProvided = true;
+      if (positionals[0]?.toLowerCase() === "check") positionals.push(arg);
     } else if (arg.startsWith("-") && positionals[0]?.toLowerCase() !== "check") {
       // Ignore unknown flags for non-check commands.
     } else {
@@ -51,6 +76,8 @@ function parseArgs(rawArgs) {
     scratchpadDir,
     cwd,
     endpoint,
+    endpointProvided,
+    modelProvided,
     help,
   };
 }
@@ -66,6 +93,7 @@ Usage:
   claude-jev last --session-id <id>
   claude-jev output --session-id <id>
   claude-jev check <text>
+  claude-jev ask < request.json
 
 Options:
   --session-id <id>        Exact session ID for session state and toggles
@@ -74,6 +102,50 @@ Options:
   --endpoint <url>         Custom TypeSafe API endpoint
   -h, --help               Show this help message
 `);
+}
+
+async function readDecisionInput() {
+  const chunks = [];
+  let totalBytes = 0;
+
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_DECISION_INPUT_BYTES) {
+      throw new DecisionInputError("Invalid decision request: input exceeds 64 KiB.");
+    }
+    chunks.push(buffer);
+  }
+
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+function reportAskError(error) {
+  if (error instanceof DecisionInputError) {
+    console.error(`Error: ${error.message}`);
+    return;
+  }
+
+  if (error instanceof TypeSafeError && error.code === "MISSING_KEY") {
+    console.error("Error: Missing TypeSafe API key.");
+    return;
+  }
+
+  if (
+    error instanceof TypeSafeError &&
+    (error.code === "MALFORMED_JSON" || error.code === "MALFORMED_RESPONSE")
+  ) {
+    console.error("Error: TypeSafe response is invalid.");
+    return;
+  }
+
+  if (error instanceof TypeSafeError) {
+    const status = typeof error.status === "number" ? ` (HTTP ${error.status})` : "";
+    console.error(`Error: TypeSafe request failed${status}.`);
+    return;
+  }
+
+  console.error("Error: Decision request failed.");
 }
 
 async function main() {
@@ -222,6 +294,39 @@ Session:
       console.log(`  Failure class: ${verdict.failureClass ?? "none"}${verdict.failureConfidence !== undefined ? ` (conf: ${verdict.failureConfidence})` : ""}`);
       if (verdict.advice) {
         console.log(`  Advice: ${verdict.advice}`);
+      }
+      break;
+    }
+
+    case "ask": {
+      if (args.positionals.length !== 1 || args.modelProvided || args.endpointProvided) {
+        console.error("Error: ask command does not accept positional arguments, --model, or --endpoint.");
+        process.exitCode = 1;
+        break;
+      }
+
+      try {
+        const input = await readDecisionInput();
+        const config = loadConfig(cwd);
+        const decision = parseDecisionRequest(input, config.maxStateChars);
+        const response = await askTypeSafe({
+          model: config.model,
+          state: decision.state,
+          questions: decision.questions,
+          apiKey: config.apiKey,
+          endpoint: config.endpoint,
+          timeoutMs: config.timeoutMs,
+          retries: config.retries,
+        });
+        const output = {
+          model: response.model,
+          ...(response.usage === undefined ? {} : { usage: response.usage }),
+          answers: response.answers,
+        };
+        process.stdout.write(`${JSON.stringify(output)}\n`);
+      } catch (error) {
+        reportAskError(error);
+        process.exitCode = 1;
       }
       break;
     }
