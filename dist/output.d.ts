@@ -14,7 +14,7 @@
  *
  * Leak and advice notices must never include output text or detected values.
  */
-import { askJev, type JevResponse } from "./client.ts";
+import { askTypeSafe, type TypeSafeResponse } from "./client.ts";
 import type { LoadedConfig, OutputConfig } from "./config.ts";
 import { type OutputInput } from "./state.ts";
 import type { SessionStore } from "./hook-io.ts";
@@ -125,11 +125,11 @@ export type EvaluateOutputConfig = LoadedConfig | OutputConfig | OutputThreshold
     output?: OutputThresholds | OutputConfig;
     [key: string]: unknown;
 };
-export declare function evaluateOutput(response: JevResponse, config?: EvaluateOutputConfig): OutputVerdict;
+export declare function evaluateOutput(response: TypeSafeResponse, config?: EvaluateOutputConfig): OutputVerdict;
 export interface JudgeOutputOptions {
     config?: LoadedConfig | EvaluateOutputConfig;
     sessionStore?: SessionStore;
-    askJevFn?: typeof askJev;
+    askJevFn?: typeof askTypeSafe;
     signal?: AbortSignal;
 }
 export declare function judgeOutput(payload: RawOutputPayload, options?: JudgeOutputOptions): Promise<OutputVerdict>;

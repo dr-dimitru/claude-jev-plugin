@@ -140,6 +140,12 @@ Content-Type: application/json
 
 Response must contain model, usage, and one typed answer per question. Plugin rejects missing answers, unknown options, incomplete distributions, invalid score legends, non-finite numbers, and probabilities that do not sum to one.
 
+## Model selection
+
+The trusted global `model` setting defaults to `jev-latest`. Project config cannot change the model or endpoint. The client sends a non-empty configured model ID unchanged and does not fall back when the selected model is unavailable or returns an invalid response.
+
+TypeSafe's current [model docs](https://docs.typesafe.ai/models) list Jev and its aliases. `GET /v1/models` returns the names available to your account. Before selecting another ID, confirm it there and check that its responses match TypeSafe's documented [System One response contract](https://docs.typesafe.ai/api). This guide lists only the verified Jev default.
+
 ## Question primitives
 
 ### Noul

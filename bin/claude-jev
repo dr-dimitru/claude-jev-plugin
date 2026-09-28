@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import * as path from "node:path";
-import { askJev, redact, boundText } from "../dist/client.js";
+import { askTypeSafe, redact, boundText } from "../dist/client.js";
 import { loadConfig } from "../dist/config.js";
 import { buildGateState } from "../dist/state.js";
 import { sessionStore } from "../dist/hook-io.js";
@@ -251,7 +251,7 @@ Session:
       });
 
       try {
-        const response = await askJev({
+        const response = await askTypeSafe({
           model: config.model,
           state,
           questions: GATE_QUESTIONS,

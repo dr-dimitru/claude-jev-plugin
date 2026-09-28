@@ -162,6 +162,8 @@ Project configuration cannot set `model`, `endpoint`, `timeoutMs`, `retries`, `a
 
 Every endpoint must use HTTPS and cannot contain embedded credentials.
 
+The global `model` setting defaults to `jev-latest`. TypeSafe currently documents Jev and its aliases. Use `GET /v1/models` to check model names available to your account. The client sends a non-empty configured model ID unchanged and does not fall back when TypeSafe rejects it. Check any other ID against the [TypeSafe model docs](https://docs.typesafe.ai/models) and [API response contract](https://docs.typesafe.ai/api) before selecting it.
+
 Example project configuration:
 
 ```json

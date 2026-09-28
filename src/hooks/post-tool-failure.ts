@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { askJev } from "../client.ts";
+import { askTypeSafe } from "../client.ts";
 import type { LoadedConfig } from "../config.ts";
 import { writeHookOutput } from "./common.ts";
 import { runOutputHook } from "./output-handler.ts";
@@ -16,7 +16,7 @@ export interface PostToolFailureOutput {
 
 export interface PostToolFailureOptions {
   fetch?: typeof fetch;
-  askJevFn?: typeof askJev;
+  askJevFn?: typeof askTypeSafe;
   config?: LoadedConfig;
 }
 

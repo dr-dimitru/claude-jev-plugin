@@ -68,7 +68,7 @@ describe("config loading", () => {
     fs.writeFileSync(
       path.join(globalClaudeDir, "claude-jev.json"),
       JSON.stringify({
-        model: "jev-custom",
+        model: "provider/custom-model-v2",
         timeoutMs: 15000,
         gate: {
           mode: "enforce",
@@ -83,7 +83,7 @@ describe("config loading", () => {
       env: {},
     });
 
-    assert.equal(config.model, "jev-custom");
+    assert.equal(config.model, "provider/custom-model-v2");
     assert.equal(config.timeoutMs, 15000);
     assert.equal(config.gate.mode, "enforce");
     assert.equal(config.gate.argumentChars, 600);
@@ -101,7 +101,7 @@ describe("config loading", () => {
     fs.writeFileSync(
       path.join(globalClaudeDir, "claude-jev.json"),
       JSON.stringify({
-        model: "jev-global",
+        model: "provider/global-model-v1",
         timeoutMs: 15000,
         gate: {
           mode: "shadow",
@@ -120,7 +120,7 @@ describe("config loading", () => {
     fs.writeFileSync(
       path.join(projectClaudeDir, "claude-jev.json"),
       JSON.stringify({
-        model: "jev-project",
+        model: "provider/project-model-v1",
         gate: {
           mode: "enforce",
         },
@@ -134,7 +134,7 @@ describe("config loading", () => {
     });
 
     // Project overrides judgment behavior, but model selection remains user-controlled.
-    assert.equal(config.model, "jev-global");
+    assert.equal(config.model, "provider/global-model-v1");
     assert.equal(config.gate.mode, "enforce");
     // Global overrides default
     assert.equal(config.timeoutMs, 15000);
@@ -143,6 +143,21 @@ describe("config loading", () => {
     // Default preserved
     assert.equal(config.maxStateChars, 8000);
     assert.equal(config.gate.blockOn.destructive, 0.9);
+  });
+
+  it("keeps the Jev default when global model is empty or whitespace-only", () => {
+    const globalClaudeDir = path.join(fakeHomeDir, ".claude");
+    fs.mkdirSync(globalClaudeDir, { recursive: true });
+    const configPath = path.join(globalClaudeDir, "claude-jev.json");
+
+    for (const model of ["", " \t\n"]) {
+      fs.writeFileSync(configPath, JSON.stringify({ model }), "utf-8");
+      const config = loadConfig(projectDir, {
+        homeDir: fakeHomeDir,
+        env: {},
+      });
+      assert.equal(config.model, "jev-latest");
+    }
   });
 
   it("ignores project-controlled secrets and transport settings", () => {

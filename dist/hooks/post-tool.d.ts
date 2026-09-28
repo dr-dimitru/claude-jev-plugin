@@ -1,4 +1,4 @@
-import { askJev } from "../client.ts";
+import { askTypeSafe } from "../client.ts";
 import type { LoadedConfig } from "../config.ts";
 export interface PostToolHookSpecificOutput {
     hookEventName: "PostToolUse";
@@ -11,7 +11,7 @@ export interface PostToolOutput {
 }
 export interface PostToolOptions {
     fetch?: typeof fetch;
-    askJevFn?: typeof askJev;
+    askJevFn?: typeof askTypeSafe;
     config?: LoadedConfig;
 }
 export declare function runPostTool(rawPayload?: unknown, options?: PostToolOptions): Promise<PostToolOutput | null>;

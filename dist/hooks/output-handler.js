@@ -1,6 +1,6 @@
 import { sessionStore } from "../hook-io.js";
 import { loadConfig } from "../config.js";
-import { askJev, DEFAULT_MODEL } from "../client.js";
+import { askTypeSafe, DEFAULT_TYPESAFE_MODEL } from "../client.js";
 import { getOrCreateCached } from "../cache.js";
 import { buildOutputState } from "../state.js";
 import { normalizeToolOutput, outputJudgmentKey, evaluateOutput, OUTPUT_QUESTIONS, } from "../output.js";
@@ -67,7 +67,7 @@ export async function runOutputHook(eventName, rawPayload, options) {
             },
         });
         const cacheKey = outputJudgmentKey(boundedState, {
-            model: config.model ?? DEFAULT_MODEL,
+            model: config.model ?? DEFAULT_TYPESAFE_MODEL,
             questions: OUTPUT_QUESTIONS,
             thresholds: {
                 leakThreshold: config.output.leakThreshold ?? 0.9,
@@ -75,11 +75,11 @@ export async function runOutputHook(eventName, rawPayload, options) {
             },
         });
         const askFn = options?.askJevFn ?? (options?.fetch
-            ? (call) => askJev({ ...call, fetch: options.fetch })
-            : askJev);
+            ? (call) => askTypeSafe({ ...call, fetch: options.fetch })
+            : askTypeSafe);
         const verdict = await getOrCreateCached(cacheKey, 120_000, async () => {
             const response = await askFn({
-                model: config.model ?? DEFAULT_MODEL,
+                model: config.model ?? DEFAULT_TYPESAFE_MODEL,
                 state: boundedState,
                 questions: OUTPUT_QUESTIONS,
                 apiKey: config.apiKey,

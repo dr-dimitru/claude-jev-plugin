@@ -155,6 +155,8 @@ Global `~/.claude/claude-jev.json` may set model, HTTPS endpoint, total timeout,
 
 Project `.claude/claude-jev.json` may set gate/output enablement, mode, tools, bounds, cache duration, thresholds, and `blockWithoutUI`. It cannot set model, endpoint, timeout, retries, API key, or key file. This prevents repository-controlled credential and data redirection.
 
+The global `model` setting defaults to `jev-latest`. The client forwards a non-empty configured ID unchanged. An unavailable or incompatible selection returns no validated judgment; the client does not retry with Jev. Check alternate IDs in TypeSafe's [model docs](https://docs.typesafe.ai/models) or `GET /v1/models`, then confirm the [System One response contract](https://docs.typesafe.ai/api).
+
 Endpoints must use HTTPS and cannot contain embedded credentials.
 
 ## External data

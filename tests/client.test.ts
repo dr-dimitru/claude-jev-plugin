@@ -220,6 +220,30 @@ describe("TypeSafe Jev Client", () => {
       assert.equal(capturedModel, model);
     });
 
+    it("does not fall back to Jev when the selected model is unavailable", async () => {
+      const selectedModel = "provider/unavailable-model";
+      const attemptedModels: string[] = [];
+
+      await assert.rejects(
+        askTypeSafe({
+          apiKey: "test-key",
+          model: selectedModel,
+          state: {},
+          questions: { q1: { type: "noul", instructions: "test" } },
+          fetch: async (_input, init) => {
+            attemptedModels.push(JSON.parse(String(init?.body)).model);
+            return new Response("model unavailable", { status: 404 });
+          },
+        }),
+        (error: unknown) =>
+          error instanceof TypeSafeError &&
+          error.status === 404 &&
+          error.code === "HTTP_404"
+      );
+
+      assert.deepEqual(attemptedModels, [selectedModel]);
+    });
+
     it("rejects non-HTTPS endpoints before fetch", async () => {
       let fetched = false;
 
