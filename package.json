@@ -21,6 +21,7 @@
     "docs/reliability-and-privacy.md",
     "docs/end-to-end-example.md",
     "docs/local-models.md",
+    "docs/benchmarks/model-comparison.md",
     "README.md",
     "LICENSE"
   ],
