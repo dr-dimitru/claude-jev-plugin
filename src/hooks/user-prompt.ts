@@ -60,9 +60,12 @@ export async function runUserPrompt(payload?: unknown): Promise<void> {
         ...new Set([
           resolveSessionBaseDir({ scratchpadDir }),
           resolveCacheBase({ scratchpadDir }),
-          // Legacy root: older versions stored state here even when
-          // CLAUDE_PLUGIN_DATA was set. Data ages out via retention.
+          // Legacy roots: older versions kept caches in the home fallback and
+          // session state under CLAUDE_PLUGIN_DATA. Both age out via retention.
           path.join(process.env.HOME ?? os.homedir(), ".cache", "claude-jev"),
+          ...(process.env.CLAUDE_PLUGIN_DATA?.trim()
+            ? [path.join(path.resolve(process.env.CLAUDE_PLUGIN_DATA.trim()), "sessions")]
+            : []),
         ]),
       ];
       await maybePruneSessionData({

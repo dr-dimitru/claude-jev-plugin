@@ -317,10 +317,11 @@ Cache keys include exact bounded request state, current directory, model, questi
 State path precedence:
 
 1. Claude `scratchpad_dir` when supplied;
-2. `CLAUDE_PLUGIN_DATA/sessions`;
-3. legacy fallback `~/.cache/claude-jev`.
+2. `~/.cache/claude-jev`.
 
-Files use restrictive permissions. Scratchpad lifetime is owned by Claude Code. Plugin data persists across updates and is removed by standard uninstall unless `--keep-data` is used. Legacy fallback has no automatic retention sweep.
+Session state does not use `CLAUDE_PLUGIN_DATA`. Claude Code sets that variable for hooks but not for the Bash tool, so the CLI would read a different directory than the hooks. Judgment caches are hook-only and use `CLAUDE_PLUGIN_DATA/cache` when it is set. Versions before 0.2.1 kept session state in `CLAUDE_PLUGIN_DATA/sessions`; the retention sweep removes it.
+
+Files use restrictive permissions. Scratchpad lifetime is owned by Claude Code. Plugin data persists across updates and is removed by standard uninstall unless `--keep-data` is used. `UserPromptSubmit` deletes state and caches older than `retentionDays` (default 7) at most once per day.
 
 ## CLI and skill
 

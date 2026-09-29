@@ -201,6 +201,24 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       assert.match(res.stdout, /enforce/i);
       assert.doesNotMatch(res.stdout, /session.*unknown/i);
     });
+
+    it("reads state that hooks wrote with CLAUDE_PLUGIN_DATA set", async () => {
+      // Claude sets CLAUDE_PLUGIN_DATA for hooks but not for its Bash tool.
+      const sessionId = "cli-status-plugin-data";
+      const home = path.join(tempDir, "home-plugin-data");
+      const hookStore = sessionStore({
+        sessionId,
+        homeDir: home,
+        env: { CLAUDE_PLUGIN_DATA: path.join(tempDir, "plugin-data") },
+      });
+      await hookStore.setOverrides({ mode: "enforce" });
+
+      const res = runCli(["status", "--session-id", sessionId], {
+        env: { HOME: home, CLAUDE_PLUGIN_DATA: undefined },
+      });
+      assert.strictEqual(res.status, 0, `CLI error: ${res.stderr}`);
+      assert.match(res.stdout, /Session overrides: enabled=none, mode=enforce/);
+    });
   });
 
   describe("Session-only toggles (enable, disable, mode)", () => {
@@ -857,7 +875,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         "/plugin uninstall claude-jev@dr-dimitru-claude-tools",
         "BSD-3-Clause",
         "Project configuration cannot set",
-        "CLAUDE_PLUGIN_DATA/sessions",
+        "CLAUDE_PLUGIN_DATA/cache",
         "total request deadline",
       ]) {
         assert.ok(readme.includes(marker), `README is missing: ${marker}`);
