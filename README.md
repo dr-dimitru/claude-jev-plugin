@@ -86,10 +86,7 @@ Pre-tool gate sends four independent questions in one API request:
 
 Shadow mode is default. Flagged action produces short warning and continues. Enforce mode returns Claude Code's native `permissionDecision: "ask"`. Plugin never returns `allow` from TypeSafe confidence.
 
-Successful and failed Bash results send two questions in one request:
-
-- `leaks_secret`, Noul threshold `0.90`;
-- `failure_class`, Choice confidence threshold `0.60`.
+Successful Bash output is asked only `leaks_secret` (Noul threshold `0.90`). Failed Bash output is asked both `leaks_secret` and `failure_class` (Choice confidence threshold `0.60`). Classifying successful output produced false advice, so successful commands never receive failure advice.
 
 Failure advice is fixed local text for `transient`, `environment`, `code_bug`, `permission`, and `user_error`. TypeSafe does not generate advice.
 
@@ -190,10 +187,13 @@ Example project configuration:
     "tools": ["Bash"],
     "outputChars": 2000,
     "leakThreshold": 0.9,
-    "minConfidence": 0.6
+    "minConfidence": 0.6,
+    "successCheck": "prefilter"
   }
 }
 ```
+
+Setting `output.successCheck` controls when successful output is evaluated. Value `"prefilter"` (default) sends successful output to TypeSafe only when a local scan finds credential-like text or a secret-reading command. Value `"always"` sends every successful command output to TypeSafe.
 
 Example trusted global transport configuration:
 
@@ -230,18 +230,18 @@ Two open-weight models are documented as local alternatives. Neither is served b
 | Model | Source | Start command | Default bind | Endpoint |
 | --- | --- | --- | --- | --- |
 | Kev | https://github.com/jaredpalmer/kev | `uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009` | `127.0.0.1` | `http://127.0.0.1:8009/v1/systemone` |
-| Laya | https://github.com/NandhaKishorM/laya | `LAYA_DEVICE=cuda LAYA_PRELOAD=1 laya-serve` | `0.0.0.0:8000` | `http://127.0.0.1:8000/v1/systemone` |
+| Laya | https://github.com/NandhaKishorM/laya | `LAYA_HOST=127.0.0.1 LAYA_DEVICE=mps laya-serve` | `0.0.0.0:8000` | `http://127.0.0.1:8000/v1/systemone` |
 
 Kev is an Apache-2.0 community model by Jared Palmer. Checkpoints are `jaredpalmer/kev-0.8b`, `kev-4b`, `kev-9b`, and `kev-27b`. It answers `POST /v1/systemone` with the TypeSafe wire contract, echoes the requested model, and adds `latency_ms`, which the plugin drops.
 
-Laya is an Apache-2.0 model by Convai Innovations. Its models are `english`, `multilingual`, and `typed-decisions`, and the response `model` is the checkpoint name. It answers `POST /v1/systemone` with the TypeSafe Jev wire protocol, with these differences:
+Laya is an Apache-2.0 model by Convai Innovations. Checkpoints are `english`, `multilingual`, and `typed-decisions`. `LAYA_DEVICE` is `cuda`, `mps`, or `cpu`. The response `model` is `laya-rl-agent`, not the requested checkpoint name. The requested checkpoint appears in a top-level `routing` object (`routing.model`, `routing.reason`). The plugin drops `routing`. It answers `POST /v1/systemone` with the TypeSafe Jev wire protocol, with these differences:
 
-- Answers omit `type` and add `answer_confidence`. The plugin takes the type from the declared question and drops `answer_confidence`.
+- Answers include `type`. They add `answer_confidence` and an `action` object, which the plugin drops. Noul answers also carry `confidence`, which the plugin drops (the System One noul contract has no confidence). The plugin still accepts answers without `type` when the question is declared.
+- Noul, score, and choice answers all pass plugin validation (score legend keys "0".."n-1" equal the criteria).
 - Choice allows up to 100 options on Laya. The plugin cap stays at 20.
 - Every score level needs a description. Plugin score criteria are always strings, so this holds.
-- Laya's README shows only the choice response shape. Noul and score responses are not documented there and are unverified.
 
-Laya binds `0.0.0.0` by default, so other machines on the network can reach it. Restrict it with a firewall, or bind it to loopback if your setup allows.
+Laya binds 0.0.0.0 by default; start it with LAYA_HOST=127.0.0.1 to keep it on loopback.
 
 Example global configuration for Kev:
 
@@ -263,7 +263,7 @@ Local endpoint rules:
 - State and questions stay on your machine and TypeSafe does not bill them. Hooks and `claude-jev ask` still send the same data to the local process.
 - `claude-jev status` shows `Endpoint: local` or `Endpoint: remote`, and says the key is not required for a local endpoint.
 
-There is no automatic fallback. The client sends the configured model once per attempt. If TypeSafe answers with a different model family (the text before the first `-`, such as `jev` versus `kev`). An `org/` prefix is ignored, so `jaredpalmer/kev-4b` and `kev-latest` are both family `kev`. Laya names are their own families: `english`, `multilingual`, and `typed`, the call fails with `MODEL_MISMATCH`. Versioned IDs in the same family are accepted, so `jev-latest` may answer as `jev-1.13.0`.
+There is no automatic fallback. The client sends the configured model once per attempt. The model-family check applies only to remote endpoints. A local server is run by the user and may report its own checkpoint name (Laya answers `english` requests as `laya-rl-agent`), so local responses are not rejected for a model mismatch. Remote endpoints fail with `MODEL_MISMATCH` on a cross-family answer. Family is the text before the first `-`. An `org/` prefix is ignored, so `jaredpalmer/kev-4b` and `kev-latest` are both family `kev`. Versioned IDs in the same family are accepted, so `jev-latest` may answer as `jev-1.13.0`.
 
 Probability maps must sum to one within `max(0.05, categories x 0.005)`. The client then renormalizes them.
 
@@ -352,6 +352,8 @@ claude-jev output --session-id <id>
 Claude does not document session-ID environment variable for skill subprocesses. Exact controls require explicit hook session ID and, when applicable, `--scratchpad-dir`. They never edit persistent config.
 
 ## Test and validate
+
+The repository has no lockfile on purpose: Claude Code installs dependencies in installed plugin copies when a lockfile exists, and the only dependency is the exactly pinned TypeScript compiler used at build time.
 
 ```bash
 npm ci --ignore-scripts

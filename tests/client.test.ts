@@ -1642,3 +1642,46 @@ describe("Local System One servers", async () => {
     assert.notEqual(client.modelFamily("english"), client.modelFamily("multilingual"));
   });
 });
+
+describe("Model check for local servers", async () => {
+  const client = await import("../src/client.ts");
+  const usage = { input_tokens: 1, output_tokens: 0 };
+
+  it("accepts a local server that reports its own checkpoint name", async () => {
+    const res = await client.askTypeSafe({
+      model: "english",
+      endpoint: "http://127.0.0.1:8000/v1/systemone",
+      state: "s",
+      questions: { q: { type: "noul", instructions: "Is it?" } },
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            model: "laya-rl-agent",
+            routing: { model: "english", reason: "explicit model='english'" },
+            answers: { q: { type: "noul", noul: 0.4, confidence: 0.8, answer_confidence: 0.9 } },
+            usage,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+    });
+    assert.equal(res.model, "laya-rl-agent");
+    assert.deepEqual(res.answers.q, { type: "noul", noul: 0.4 });
+  });
+
+  it("still rejects a cross-family answer from a remote endpoint", async () => {
+    await assert.rejects(
+      client.askTypeSafe({
+        apiKey: "k",
+        model: "jev-latest",
+        state: "s",
+        questions: { q: { type: "noul", instructions: "Is it?" } },
+        fetch: async () =>
+          new Response(
+            JSON.stringify({ model: "laya-rl-agent", answers: { q: { type: "noul", noul: 0.4 } }, usage }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          ),
+      }),
+      (error: unknown) => error instanceof client.TypeSafeError && error.code === "MODEL_MISMATCH"
+    );
+  });
+});

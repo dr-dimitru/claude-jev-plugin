@@ -471,7 +471,10 @@ export async function askTypeSafe(call) {
                             throw abortError();
                         throw new TypeSafeError(`Malformed JSON response from TypeSafe API: ${parseErr.message}`, { code: "MALFORMED_JSON", retryable: false, cause: parseErr });
                     }
-                    return validateTypeSafeResponse(json, call.questions, model);
+                    // A local server is run by the user and may report its own checkpoint
+                    // name (Laya answers "english" requests as "laya-rl-agent"), so the
+                    // model-family check only guards remote endpoints.
+                    return validateTypeSafeResponse(json, call.questions, local ? undefined : model);
                 }
                 const status = res.status;
                 const retryable = isRetryableStatus(status);
