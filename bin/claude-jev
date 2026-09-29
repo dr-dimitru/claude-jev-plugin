@@ -93,24 +93,94 @@ function formatGateScores(scores) {
   return `Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`;
 }
 
+const STDIN_IDLE_TIMEOUT_MS = 5000;
+
 class StdinTooLargeError extends Error {}
+
+class StdinTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`stdin idle timeout after ${timeoutMs} ms`);
+    this.name = "StdinTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function getStdinIdleTimeoutMs() {
+  const raw = process.env.CLAUDE_JEV_STDIN_TIMEOUT_MS;
+  if (raw !== undefined) {
+    const trimmed = raw.trim();
+    if (/^[1-9]\d*$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isSafeInteger(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return STDIN_IDLE_TIMEOUT_MS;
+}
 
 /**
  * Reads stdin as UTF-8, stopping once more than maxBytes arrive so oversized
- * input is never fully buffered.
+ * input is never fully buffered, or if no chunk arrives within timeoutMs.
  */
-async function readBoundedStdin(maxBytes) {
-  const chunks = [];
-  let total = 0;
-  for await (const chunk of process.stdin) {
-    total += chunk.length;
-    if (total > maxBytes) {
-      process.stdin.destroy();
-      throw new StdinTooLargeError();
-    }
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
+function readBoundedStdin(maxBytes, timeoutMs = getStdinIdleTimeoutMs()) {
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const chunks = [];
+    let total = 0;
+    let timer = null;
+
+    const cleanup = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      stdin.removeListener("data", onData);
+      stdin.removeListener("end", onEnd);
+      stdin.removeListener("error", onError);
+    };
+
+    const resetTimer = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+      timer = setTimeout(() => {
+        cleanup();
+        stdin.destroy();
+        reject(new StdinTimeoutError(timeoutMs));
+      }, timeoutMs);
+    };
+
+    const onData = (chunk) => {
+      const len = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+      total += len;
+      if (total > maxBytes) {
+        cleanup();
+        stdin.destroy();
+        reject(new StdinTooLargeError());
+        return;
+      }
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      resetTimer();
+    };
+
+    const onEnd = () => {
+      cleanup();
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+
+    const onError = (err) => {
+      cleanup();
+      reject(err);
+    };
+
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.on("error", onError);
+
+    resetTimer();
+    stdin.resume();
+  });
 }
 
 /**
@@ -136,12 +206,16 @@ async function runAsk(args, cwd) {
     failAsk("ask reads a JSON request from stdin. Usage: claude-jev ask < request.json", 2);
   }
 
+  const ms = getStdinIdleTimeoutMs();
   let input;
   try {
-    input = await readBoundedStdin(MAX_DECISION_INPUT_BYTES);
+    input = await readBoundedStdin(MAX_DECISION_INPUT_BYTES, ms);
   } catch (err) {
     if (err instanceof StdinTooLargeError) {
       failAsk(`invalid decision request (INPUT_TOO_LARGE): input exceeds ${MAX_DECISION_INPUT_BYTES} bytes`, 2);
+    }
+    if (err instanceof StdinTimeoutError) {
+      failAsk(`ask reads a JSON request from stdin; no input arrived within ${ms} ms. Usage: claude-jev ask < request.json`, 2);
     }
     failAsk("could not read stdin", 2);
   }

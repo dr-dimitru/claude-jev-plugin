@@ -106,6 +106,13 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         "check must build committed runtime before CLI tests execute"
       );
     });
+
+    it("has no lockfile, pins typescript exactly, and has no runtime dependencies", () => {
+      assert.equal(fs.existsSync(path.join(REPO_ROOT, "package-lock.json")), false);
+      const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+      assert.match(pkg.devDependencies.typescript, /^\d+\.\d+\.\d+$/);
+      assert.ok(!pkg.dependencies || Object.keys(pkg.dependencies).length === 0);
+    });
   });
 
   describe("File existence and permissions", () => {
@@ -772,6 +779,59 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         assert.match(result.stderr, /ask takes no arguments or options/);
         assert.equal(calls.length, 0);
       }
+    });
+
+    it("times out when stdin remains idle without input", async () => {
+      const home = fs.mkdtempSync(path.join(tempDir, "home-"));
+      const mergedEnv = {
+        ...process.env,
+        HOME: home,
+        CLAUDE_JEV_STDIN_TIMEOUT_MS: "300",
+      };
+
+      const result = await new Promise<RunResult>((resolve, reject) => {
+        const child = spawn(process.execPath, [BIN_PATH, "ask"], {
+          cwd: home,
+          env: mergedEnv as NodeJS.ProcessEnv,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        let done = false;
+
+        const timer = setTimeout(() => {
+          if (!done) {
+            done = true;
+            child.kill();
+            reject(new Error("Process did not end within 5 seconds"));
+          }
+        }, 5000);
+
+        child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+        child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+        child.on("error", (err) => {
+          if (!done) {
+            done = true;
+            clearTimeout(timer);
+            reject(err);
+          }
+        });
+        child.on("close", (status) => {
+          if (!done) {
+            done = true;
+            clearTimeout(timer);
+            resolve({
+              status,
+              stdout: Buffer.concat(stdout).toString("utf-8"),
+              stderr: Buffer.concat(stderr).toString("utf-8"),
+            });
+          }
+        });
+      });
+
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /no input arrived within 300 ms/);
     });
   });
 
