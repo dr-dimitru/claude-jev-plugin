@@ -157,7 +157,7 @@ Project `.claude/claude-jev.json` may set gate/output enablement, mode, tools, b
 
 Remote endpoints must use HTTPS. Plain `http:` is allowed only for a local endpoint, meaning hostname `localhost`, `127.x.x.x`, or `[::1]`. No endpoint may contain embedded credentials.
 
-A local endpoint needs no API key. The client sends no Authorization header without one and never sends `TYPESAFE_API_KEY` to a local endpoint. A key for a local server (`KEV_API_KEY` or `LAYA_API_KEY`) goes in the global `apiKeyFile`. Laya binds `0.0.0.0` by default, so restrict it with a firewall or bind it to loopback if your setup allows.
+A local endpoint needs no API key. The client sends no Authorization header without one and never sends `TYPESAFE_API_KEY` to a local endpoint. A key for a local server (`KEV_API_KEY` or `LAYA_API_KEY`) goes in the global `apiKeyFile`. Laya binds 0.0.0.0 by default; start it with LAYA_HOST=127.0.0.1 to keep it on loopback.
 
 With a local model such as Kev (https://github.com/jaredpalmer/kev) or Laya (https://github.com/NandhaKishorM/laya), state and questions stay on the machine and TypeSafe does not bill them. Hooks and `claude-jev ask` still send the same data to that local process. `claude-jev status` shows `Endpoint: local` or `Endpoint: remote`.
 
@@ -191,7 +191,7 @@ Input limits apply before any request:
 
 Invalid input exits with code 2 and sends nothing. TypeSafe or configuration errors exit with code 1. Error output has only a fixed category, code, HTTP status, and model. It never includes response bodies, state, or question text.
 
-The client makes no model fallback. A response from a different model family fails with `MODEL_MISMATCH`.
+The client makes no model fallback. The model-family check applies only to remote endpoints. A local server is run by the user and may report its own checkpoint name (Laya answers `english` requests as `laya-rl-agent`), so local responses are not rejected for a model mismatch. Remote endpoints fail with `MODEL_MISMATCH` on a cross-family answer.
 
 ## Local state
 
@@ -224,6 +224,8 @@ flowchart TD
 
 
 State contains bounded prompt, session overrides, latest verdict summaries, seen tool IDs, and diagnostic timestamps. Session filenames hash session and optional agent identities. Files use restrictive permissions and locked atomic updates.
+
+Session state and judgment caches share one root. With a scratchpad, state is `<scratchpad>/<hash>.json` and caches are `<scratchpad>/cache/<hash>`. With `CLAUDE_PLUGIN_DATA`, state is `$CLAUDE_PLUGIN_DATA/sessions` and caches are `$CLAUDE_PLUGIN_DATA/cache`. Otherwise both use `~/.cache/claude-jev`. Older versions kept caches in `~/.cache/claude-jev/cache` even when plugin data existed. The retention sweep also prunes that legacy tree, so it ages out after `retentionDays`.
 
 Scratchpad lifetime is managed by Claude Code. Plugin data persists through updates and is removed by uninstall unless `--keep-data` is used. Retention. Session state files and per-session cache directories older than `retentionDays` (default 7, global configuration only, `0` disables) are deleted by `UserPromptSubmit`, at most once per day. A marker file `.last-prune` in the first existing state directory throttles the sweep. The sweep skips the current session, deletes at most 500 items per run, never follows symlinks, and touches only files named by the plugin's hash patterns. It fails open.
 

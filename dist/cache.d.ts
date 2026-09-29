@@ -15,6 +15,7 @@ export interface CacheOptions {
     agentId?: string;
     scratchpadDir?: string;
     homeDir?: string;
+    env?: NodeJS.ProcessEnv;
     lockTimeoutMs?: number;
     staleLockMs?: number;
     pollIntervalMs?: number;
@@ -36,6 +37,7 @@ export declare function normalizeKey(input: unknown): string;
 export declare function resolveCacheBase(options?: {
     scratchpadDir?: string;
     homeDir?: string;
+    env?: NodeJS.ProcessEnv;
 }): string;
 /**
  * Gets a cached value or coordinates concurrent execution of the producer.

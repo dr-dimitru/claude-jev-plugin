@@ -28,6 +28,7 @@ export interface CacheOptions {
   agentId?: string;
   scratchpadDir?: string;
   homeDir?: string;
+  env?: NodeJS.ProcessEnv;
   lockTimeoutMs?: number;
   staleLockMs?: number;
   pollIntervalMs?: number;
@@ -94,11 +95,16 @@ function toSafeKey(key: unknown): string {
 export function resolveCacheBase(options?: {
   scratchpadDir?: string;
   homeDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
+  const env = options?.env ?? process.env;
   if (options?.scratchpadDir && options.scratchpadDir.trim().length > 0) {
     return path.resolve(options.scratchpadDir.trim());
   }
-  const userHome = options?.homeDir ?? process.env.HOME ?? os.homedir();
+  if (env.CLAUDE_PLUGIN_DATA?.trim()) {
+    return path.resolve(env.CLAUDE_PLUGIN_DATA.trim());
+  }
+  const userHome = options?.homeDir ?? env.HOME ?? os.homedir();
   return path.join(userHome, ".cache", "claude-jev");
 }
 

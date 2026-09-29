@@ -209,4 +209,47 @@ describe("retention", () => {
     assert.equal(fs.existsSync(oldCache), false);
     assert.equal(fs.existsSync(path.join(root, ".last-prune")), true);
   });
+
+  it("runUserPrompt prunes plugin data and legacy home roots", async () => {
+    const now = Date.now();
+    const home = path.join(root, "home");
+    const data = path.join(root, "data");
+    const legacy = path.join(home, ".cache", "claude-jev");
+    const targets: string[] = [];
+    const mk = (p: string, dir: boolean) => {
+      if (dir) fs.mkdirSync(p, { recursive: true });
+      else {
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, "{}");
+      }
+      touch(p, 30 * DAY, now);
+      targets.push(p);
+    };
+    mk(path.join(legacy, `${h("a")}.json`), false);
+    mk(path.join(legacy, "cache", h("b")), true);
+    mk(path.join(data, "sessions", `${h("c")}.json`), false);
+    mk(path.join(data, "cache", h("d")), true);
+    const outside = path.join(root, "outside.json");
+    fs.writeFileSync(outside, "{}");
+    touch(outside, 30 * DAY, now);
+
+    const saved = { HOME: process.env.HOME, CLAUDE_PLUGIN_DATA: process.env.CLAUDE_PLUGIN_DATA };
+    process.env.HOME = home;
+    process.env.CLAUDE_PLUGIN_DATA = data;
+    try {
+      await runUserPrompt({
+        session_id: "s1",
+        prompt: "hi",
+        cwd: root,
+        hook_event_name: "UserPromptSubmit",
+      });
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    for (const t of targets) assert.equal(fs.existsSync(t), false, t);
+    assert.equal(fs.existsSync(outside), true);
+  });
 });

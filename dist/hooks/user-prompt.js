@@ -4,6 +4,8 @@
  * Captures bounded user prompt into session storage for use by subsequent PreToolUse gates.
  * Returns no stdout to Claude Code. Never fails with non-zero exit code.
  */
+import * as os from "node:os";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { hashSessionIdentity, resolveSessionBaseDir, sessionStore } from "../hook-io.js";
 import { resolveCacheBase } from "../cache.js";
@@ -43,6 +45,9 @@ export async function runUserPrompt(payload) {
                 ...new Set([
                     resolveSessionBaseDir({ scratchpadDir }),
                     resolveCacheBase({ scratchpadDir }),
+                    // Legacy root: older versions stored state here even when
+                    // CLAUDE_PLUGIN_DATA was set. Data ages out via retention.
+                    path.join(process.env.HOME ?? os.homedir(), ".cache", "claude-jev"),
                 ]),
             ];
             await maybePruneSessionData({
