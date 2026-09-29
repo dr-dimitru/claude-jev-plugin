@@ -7,7 +7,8 @@ import {
   normalizeToolOutput,
   outputJudgmentKey,
   evaluateOutput,
-  OUTPUT_QUESTIONS,
+  needsOutputJudgment,
+  outputQuestionsFor,
   type OutputVerdict,
 } from "../output.ts";
 import {
@@ -81,6 +82,13 @@ export async function runOutputHook(
       };
     }
 
+    const normalized = normalizeToolOutput(payload);
+    // Successful output with nothing credential-like skips the network call.
+    if (!needsOutputJudgment(normalized, config.output.successCheck)) {
+      return { kind: "skip" };
+    }
+    const questions = outputQuestionsFor(normalized.isError);
+
     const toolUseId = typeof payload.tool_use_id === "string"
       ? payload.tool_use_id
       : undefined;
@@ -89,7 +97,6 @@ export async function runOutputHook(
       claimedToolUseId = toolUseId;
     }
 
-    const normalized = normalizeToolOutput(payload);
     const boundedState = buildOutputState({
       tool: normalized.tool,
       cwd: normalized.cwd,
@@ -104,7 +111,7 @@ export async function runOutputHook(
     });
     const cacheKey = outputJudgmentKey(boundedState, {
       model: config.model ?? DEFAULT_TYPESAFE_MODEL,
-      questions: OUTPUT_QUESTIONS,
+      questions,
       thresholds: {
         leakThreshold: config.output.leakThreshold ?? 0.9,
         minConfidence: config.output.minConfidence ?? 0.6,
@@ -122,13 +129,13 @@ export async function runOutputHook(
         const response = await askFn({
           model: config.model ?? DEFAULT_TYPESAFE_MODEL,
           state: boundedState,
-          questions: OUTPUT_QUESTIONS,
+          questions,
           apiKey: config.apiKey,
           endpoint: config.endpoint,
           timeoutMs: config.timeoutMs,
           retries: config.retries,
         });
-        return evaluateOutput(response, config);
+        return evaluateOutput(response, config, { isError: normalized.isError });
       },
       {
         scratchpadDir,

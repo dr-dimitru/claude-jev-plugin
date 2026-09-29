@@ -20,12 +20,20 @@ export interface GateConfig {
     blockOn: GateBlockOnConfig;
     blockWithoutUI: boolean;
 }
+/**
+ * How successful tool output is checked for secrets.
+ * - "prefilter": send it to TypeSafe only when a local scan finds
+ *   credential-like text or the command reads secrets.
+ * - "always": send every successful output to TypeSafe.
+ */
+export type OutputSuccessCheck = "prefilter" | "always";
 export interface OutputConfig {
     enabled: boolean;
     tools: string[];
     outputChars: number;
     leakThreshold: number;
     minConfidence: number;
+    successCheck: OutputSuccessCheck;
 }
 export interface LoadedConfig {
     model: string;

@@ -403,4 +403,12 @@ describe("config loading", () => {
       assert.equal(canCallTypeSafe(config), false);
     });
   });
+
+  it("defaults output.successCheck to prefilter and accepts always", () => {
+    assert.equal(loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).output.successCheck, "prefilter");
+    writeCfg(fakeHomeDir, { output: { successCheck: "always" } });
+    assert.equal(loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).output.successCheck, "always");
+    writeCfg(fakeHomeDir, { output: { successCheck: "sometimes" } });
+    assert.equal(loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).output.successCheck, "prefilter");
+  });
 });

@@ -43,6 +43,7 @@ export const DEFAULT_CONFIG = {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "prefilter",
     },
 };
 function cloneConfig(c) {
@@ -71,6 +72,7 @@ function cloneConfig(c) {
             outputChars: c.output.outputChars,
             leakThreshold: c.output.leakThreshold,
             minConfidence: c.output.minConfidence,
+            successCheck: c.output.successCheck,
         },
     };
 }
@@ -180,6 +182,9 @@ function mergeConfigLayer(target, raw, options) {
         }
         if (typeof o.minConfidence === "number" && Number.isFinite(o.minConfidence) && o.minConfidence >= 0 && o.minConfidence <= 1) {
             target.output.minConfidence = o.minConfidence;
+        }
+        if (o.successCheck === "prefilter" || o.successCheck === "always") {
+            target.output.successCheck = o.successCheck;
         }
     }
 }

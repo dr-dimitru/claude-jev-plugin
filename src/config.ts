@@ -36,12 +36,21 @@ export interface GateConfig {
   blockWithoutUI: boolean;
 }
 
+/**
+ * How successful tool output is checked for secrets.
+ * - "prefilter": send it to TypeSafe only when a local scan finds
+ *   credential-like text or the command reads secrets.
+ * - "always": send every successful output to TypeSafe.
+ */
+export type OutputSuccessCheck = "prefilter" | "always";
+
 export interface OutputConfig {
   enabled: boolean;
   tools: string[];
   outputChars: number;
   leakThreshold: number;
   minConfidence: number;
+  successCheck: OutputSuccessCheck;
 }
 
 export interface LoadedConfig {
@@ -97,6 +106,7 @@ export const DEFAULT_CONFIG: LoadedConfig = {
     outputChars: 2000,
     leakThreshold: 0.9,
     minConfidence: 0.6,
+    successCheck: "prefilter",
   },
 };
 
@@ -126,6 +136,7 @@ function cloneConfig(c: LoadedConfig): LoadedConfig {
       outputChars: c.output.outputChars,
       leakThreshold: c.output.leakThreshold,
       minConfidence: c.output.minConfidence,
+      successCheck: c.output.successCheck,
     },
   };
 }
@@ -279,6 +290,10 @@ function mergeConfigLayer(
 
     if (typeof o.minConfidence === "number" && Number.isFinite(o.minConfidence) && o.minConfidence >= 0 && o.minConfidence <= 1) {
       target.output.minConfidence = o.minConfidence;
+    }
+
+    if (o.successCheck === "prefilter" || o.successCheck === "always") {
+      target.output.successCheck = o.successCheck;
     }
   }
 }

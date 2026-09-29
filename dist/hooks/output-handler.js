@@ -3,7 +3,7 @@ import { canCallTypeSafe, loadConfig } from "../config.js";
 import { askTypeSafe, DEFAULT_TYPESAFE_MODEL } from "../client.js";
 import { getOrCreateCached } from "../cache.js";
 import { buildOutputState } from "../state.js";
-import { normalizeToolOutput, outputJudgmentKey, evaluateOutput, OUTPUT_QUESTIONS, } from "../output.js";
+import { normalizeToolOutput, outputJudgmentKey, evaluateOutput, needsOutputJudgment, outputQuestionsFor, } from "../output.js";
 import { emitDiagnostic, normalizeToolName, readHookPayload, } from "./common.js";
 export async function runOutputHook(eventName, rawPayload, options) {
     let payload;
@@ -45,6 +45,12 @@ export async function runOutputHook(eventName, rawPayload, options) {
                 output: await emitDiagnostic("MISSING_KEY", store),
             };
         }
+        const normalized = normalizeToolOutput(payload);
+        // Successful output with nothing credential-like skips the network call.
+        if (!needsOutputJudgment(normalized, config.output.successCheck)) {
+            return { kind: "skip" };
+        }
+        const questions = outputQuestionsFor(normalized.isError);
         const toolUseId = typeof payload.tool_use_id === "string"
             ? payload.tool_use_id
             : undefined;
@@ -53,7 +59,6 @@ export async function runOutputHook(eventName, rawPayload, options) {
                 return { kind: "skip" };
             claimedToolUseId = toolUseId;
         }
-        const normalized = normalizeToolOutput(payload);
         const boundedState = buildOutputState({
             tool: normalized.tool,
             cwd: normalized.cwd,
@@ -68,7 +73,7 @@ export async function runOutputHook(eventName, rawPayload, options) {
         });
         const cacheKey = outputJudgmentKey(boundedState, {
             model: config.model ?? DEFAULT_TYPESAFE_MODEL,
-            questions: OUTPUT_QUESTIONS,
+            questions,
             thresholds: {
                 leakThreshold: config.output.leakThreshold ?? 0.9,
                 minConfidence: config.output.minConfidence ?? 0.6,
@@ -81,13 +86,13 @@ export async function runOutputHook(eventName, rawPayload, options) {
             const response = await askFn({
                 model: config.model ?? DEFAULT_TYPESAFE_MODEL,
                 state: boundedState,
-                questions: OUTPUT_QUESTIONS,
+                questions,
                 apiKey: config.apiKey,
                 endpoint: config.endpoint,
                 timeoutMs: config.timeoutMs,
                 retries: config.retries,
             });
-            return evaluateOutput(response, config);
+            return evaluateOutput(response, config, { isError: normalized.isError });
         }, {
             scratchpadDir,
             sessionId,

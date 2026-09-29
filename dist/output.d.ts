@@ -14,7 +14,7 @@
  *
  * Leak and advice notices must never include output text or detected values.
  */
-import { askTypeSafe, type TypeSafeResponse } from "./client.ts";
+import { askTypeSafe, type TypeSafeResponse, type TypeSafeQuestion } from "./client.ts";
 import type { LoadedConfig, OutputConfig } from "./config.ts";
 import { type OutputInput } from "./state.ts";
 import type { SessionStore } from "./hook-io.ts";
@@ -44,6 +44,39 @@ export declare const OUTPUT_QUESTIONS: {
         };
     };
 };
+/** Questions for successful output: only the leak check. */
+export declare const SUCCESS_OUTPUT_QUESTIONS: {
+    readonly leaks_secret: {
+        readonly type: "noul";
+        readonly instructions: "Does `output` contain a secret or credential that must not be written to a session transcript?";
+        readonly criteria: {
+            readonly true: "A key, token, password, or private key appears in the text";
+            readonly false: "Only ordinary program output";
+        };
+    };
+};
+/**
+ * Failure classification only makes sense for failed commands. Asking it
+ * about successful output produced false advice, for example `code_bug` for
+ * a command that printed an expected error message and exited 0.
+ */
+export declare function outputQuestionsFor(isError: boolean): Record<string, TypeSafeQuestion>;
+/** Longest output prefix the local prefilter scans. */
+export declare const PREFILTER_MAX_CHARS = 1000000;
+/**
+ * Local, offline check that decides whether successful output needs a
+ * TypeSafe leak judgment. It favors recall: any credential-like text or a
+ * command that reads secrets sends the output to TypeSafe. Output that
+ * matches nothing is not sent. Set `output.successCheck: "always"` to send
+ * every successful output.
+ */
+export declare function looksSensitive(output: string, toolInput?: unknown): boolean;
+/**
+ * Returns true when output must be judged by TypeSafe. Failed output is
+ * always judged. Successful output is judged when `successCheck` is
+ * "always" or the local prefilter finds something sensitive.
+ */
+export declare function needsOutputJudgment(normalized: Pick<NormalizedOutput, "isError" | "output" | "toolInput">, successCheck?: "prefilter" | "always"): boolean;
 export type FailureClass = "transient" | "environment" | "code_bug" | "permission" | "user_error" | "no_failure";
 export declare const CLASS_ADVICE: Record<FailureClass, string | null>;
 export interface BashToolResponse {
@@ -125,7 +158,9 @@ export type EvaluateOutputConfig = LoadedConfig | OutputConfig | OutputThreshold
     output?: OutputThresholds | OutputConfig;
     [key: string]: unknown;
 };
-export declare function evaluateOutput(response: TypeSafeResponse, config?: EvaluateOutputConfig): OutputVerdict;
+export declare function evaluateOutput(response: TypeSafeResponse, config?: EvaluateOutputConfig, options?: {
+    isError?: boolean;
+}): OutputVerdict;
 export interface JudgeOutputOptions {
     config?: LoadedConfig | EvaluateOutputConfig;
     sessionStore?: SessionStore;

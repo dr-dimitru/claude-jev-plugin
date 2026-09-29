@@ -648,6 +648,7 @@ describe("Batched Jev Invocation and Session Deduplication", () => {
         session_id: "sess-judge-1",
         tool_name: "Bash",
         tool_use_id: "toolu-batch-1",
+        is_error: true,
         tool_input: { command: "curl https://example.com" },
         tool_response: { stdout: "server error: ECONNRESET" },
       };
@@ -766,5 +767,57 @@ describe("Batched Jev Invocation and Session Deduplication", () => {
     assert.ok(updated);
     assert.equal(updated.stdout, WITHHELD_OUTPUT_TEXT);
     assert.ok(!updated.stdout.includes("AKIASECRET123"));
+  });
+});
+
+describe("local secret prefilter", async () => {
+  const { looksSensitive, outputQuestionsFor, needsOutputJudgment, OUTPUT_QUESTIONS } = await import("../src/output.ts");
+
+  it("asks only the leak question for successful output", () => {
+    assert.deepEqual(Object.keys(outputQuestionsFor(false)), ["leaks_secret"]);
+    assert.equal(outputQuestionsFor(true), OUTPUT_QUESTIONS);
+  });
+
+  it("flags credential-like output", () => {
+    for (const text of [
+      "AKIAIOSFODNN7EXAMPLE",
+      "token ghp_0123456789abcdefghijABCDEFGHIJ012345",
+      "-----BEGIN OPENSSH PRIVATE KEY-----\nabc",
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+      "postgres://admin:hunter2secret@db.internal:5432/app",
+      "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz0123",
+      '{"password": "correct-horse-battery"}',
+      "Authorization: Bearer abcdefghijklmnop",
+      "session=Qm9vbGVhbkZsYWdTdHJpbmdWYWx1ZTEyMzQ1Njc4OTA",
+      "xoxb-1234567890-abcdefghij",
+    ]) {
+      assert.equal(looksSensitive(text), true, text);
+    }
+  });
+
+  it("flags commands that read secrets", () => {
+    for (const command of ["env", "printenv PATH", "cat .env", "cat ~/.aws/credentials", "gh auth token", "kubectl get secret app -o yaml", "security find-generic-password -s x -w", "cat id_ed25519"]) {
+      assert.equal(looksSensitive("ordinary text", { command }), true, command);
+    }
+  });
+
+  it("ignores ordinary output", () => {
+    for (const text of [
+      "total 8\ndrwxr-xr-x  3 user staff 96 src",
+      "commit 3c5fa97e1b2d4f6a8c0e2d4f6a8c0e2d4f6a8c0e\nAuthor: dev",
+      "sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "12 passing (340ms)\n0 failing",
+      "id 123e4567-e89b-12d3-a456-426614174000",
+      "/Users/dev/Sites/project/src/components/Button.tsx",
+      "token count: 42",
+    ]) {
+      assert.equal(looksSensitive(text, { command: "npm test" }), false, text);
+    }
+  });
+
+  it("always judges failures and respects successCheck", () => {
+    assert.equal(needsOutputJudgment({ isError: true, output: "x", toolInput: {} }), true);
+    assert.equal(needsOutputJudgment({ isError: false, output: "x", toolInput: {} }), false);
+    assert.equal(needsOutputJudgment({ isError: false, output: "x", toolInput: {} }, "always"), true);
   });
 });

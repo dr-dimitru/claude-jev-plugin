@@ -44,6 +44,94 @@ export const OUTPUT_QUESTIONS = {
         },
     },
 };
+/** Questions for successful output: only the leak check. */
+export const SUCCESS_OUTPUT_QUESTIONS = {
+    leaks_secret: OUTPUT_QUESTIONS.leaks_secret,
+};
+/**
+ * Failure classification only makes sense for failed commands. Asking it
+ * about successful output produced false advice, for example `code_bug` for
+ * a command that printed an expected error message and exited 0.
+ */
+export function outputQuestionsFor(isError) {
+    return isError ? OUTPUT_QUESTIONS : SUCCESS_OUTPUT_QUESTIONS;
+}
+// --- Local Secret Prefilter ---
+/** Longest output prefix the local prefilter scans. */
+export const PREFILTER_MAX_CHARS = 1_000_000;
+const SENSITIVE_OUTPUT_PATTERNS = [
+    // PEM and OpenSSH private keys
+    /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/,
+    // Cloud and SaaS tokens with fixed prefixes
+    /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}/,
+    /\bgithub_pat_[A-Za-z0-9_]{30,}/,
+    /\bglpat-[A-Za-z0-9_-]{20,}/,
+    /\bxox[abposr]-[A-Za-z0-9-]{10,}/,
+    /\bsk-(?:ant-|proj-|live_|test_)?[A-Za-z0-9_-]{20,}/,
+    /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/,
+    /\bAIza[0-9A-Za-z_-]{35}\b/,
+    /\bnpm_[A-Za-z0-9]{36}\b/,
+    /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/,
+    /\bhf_[A-Za-z0-9]{30,}/,
+    // JSON Web Tokens
+    /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
+    // Credentials embedded in a URL
+    /\b[a-z][a-z0-9+.-]{1,20}:\/\/[^\s:@/]{1,100}:[^\s@/]{3,200}@/i,
+    // Secret-like assignments: KEY=value, "password": "value", Authorization: Bearer value
+    /(?:api[_-]?key|secret|token|passw(?:or)?d|passwd|credential|private[_-]?key|access[_-]?key|client[_-]?secret|auth)[A-Za-z0-9_-]{0,20}["']?\s*[:=]\s*["']?[^\s"']{8,}/i,
+    /\bauthorization\s*:\s*(?:bearer|basic|token)\s+\S{8,}/i,
+];
+// Mixed-case alphanumeric runs of 32+ characters. Lowercase hex, such as
+// git SHAs and checksums, has no uppercase letter and does not match.
+const HIGH_ENTROPY_TOKEN = /[A-Za-z0-9+/_-]{32,}/g;
+function isMixedToken(token) {
+    return /[a-z]/.test(token) && /[A-Z]/.test(token) && /[0-9]/.test(token);
+}
+// Commands whose output is likely to contain secrets in any format.
+const SECRET_READING_COMMAND = /(?:^|[\s;&|(`$])(?:printenv|env|export\s+-p|set|declare\s+-x|gh\s+auth\s+token|security\s+find-(?:generic|internet)-password|kubectl\s+get\s+secrets?|aws\s+configure\s+(?:get|export-credentials)|op\s+(?:read|item\s+get)|vault\s+(?:kv\s+)?(?:read|get)|doppler\s+secrets|heroku\s+config|gcloud\s+auth\s+print-(?:access|identity)-token|az\s+account\s+get-access-token)(?=$|[\s;&|)`])|(?:\.env\b|\.npmrc|\.netrc|\.pgpass|credentials|id_(?:rsa|dsa|ecdsa|ed25519)\b|\.pem\b|\.p12\b|\.key\b|secrets?\.(?:json|ya?ml|toml))/i;
+function commandText(toolInput) {
+    if (typeof toolInput === "string")
+        return toolInput;
+    if (toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)) {
+        const command = toolInput.command;
+        if (typeof command === "string")
+            return command;
+    }
+    return "";
+}
+/**
+ * Local, offline check that decides whether successful output needs a
+ * TypeSafe leak judgment. It favors recall: any credential-like text or a
+ * command that reads secrets sends the output to TypeSafe. Output that
+ * matches nothing is not sent. Set `output.successCheck: "always"` to send
+ * every successful output.
+ */
+export function looksSensitive(output, toolInput) {
+    const command = commandText(toolInput);
+    if (command && SECRET_READING_COMMAND.test(command))
+        return true;
+    const text = output.length > PREFILTER_MAX_CHARS
+        ? output.slice(0, PREFILTER_MAX_CHARS)
+        : output;
+    if (SENSITIVE_OUTPUT_PATTERNS.some((pattern) => pattern.test(text)))
+        return true;
+    for (const match of text.matchAll(HIGH_ENTROPY_TOKEN)) {
+        if (isMixedToken(match[0]))
+            return true;
+    }
+    return false;
+}
+/**
+ * Returns true when output must be judged by TypeSafe. Failed output is
+ * always judged. Successful output is judged when `successCheck` is
+ * "always" or the local prefilter finds something sensitive.
+ */
+export function needsOutputJudgment(normalized, successCheck = "prefilter") {
+    if (normalized.isError || successCheck === "always")
+        return true;
+    return looksSensitive(normalized.output, normalized.toolInput);
+}
 export const CLASS_ADVICE = {
     transient: "Retrying the same command unchanged is reasonable.",
     environment: "Fix the environment before retrying.",
@@ -202,7 +290,7 @@ export function outputJudgmentKey(input, options) {
         .digest("hex");
 }
 export const outputKey = outputJudgmentKey;
-export function evaluateOutput(response, config) {
+export function evaluateOutput(response, config, options) {
     const cfg = config;
     const outputObj = cfg?.output;
     const leakThreshold = typeof outputObj?.leakThreshold === "number"
@@ -216,7 +304,10 @@ export function evaluateOutput(response, config) {
             ? cfg.minConfidence
             : DEFAULT_CLASS_MIN_CONFIDENCE;
     const leaksAnswer = response.answers?.leaks_secret;
-    const failureAnswer = response.answers?.failure_class;
+    // Successful output never gets failure advice, even if an answer is present.
+    const failureAnswer = options?.isError === false
+        ? undefined
+        : response.answers?.failure_class;
     const leakScore = typeof leaksAnswer?.noul === "number" ? leaksAnswer.noul : 0;
     const leaksSecret = leakScore >= leakThreshold;
     const rawChoice = failureAnswer?.choice;
@@ -283,7 +374,7 @@ export async function judgeOutput(payload, options) {
         response = await askFn({
             model: config?.model ?? DEFAULT_TYPESAFE_MODEL,
             state: boundedState,
-            questions: OUTPUT_QUESTIONS,
+            questions: outputQuestionsFor(normalized.isError),
             apiKey: config?.apiKey,
             endpoint: config?.endpoint,
             timeoutMs: config?.timeoutMs,
@@ -297,7 +388,7 @@ export async function judgeOutput(payload, options) {
         }
         throw error;
     }
-    const verdict = evaluateOutput(response, config);
+    const verdict = evaluateOutput(response, config, { isError: normalized.isError });
     if (verdict.leaksSecret && normalized.toolResponse) {
         verdict.updatedToolOutput = redactBashOutput(normalized.toolResponse);
     }
