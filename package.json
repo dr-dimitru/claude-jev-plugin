@@ -14,6 +14,7 @@
     "dist",
     "hooks",
     "skills",
+    "docs/architecture.md",
     "docs/type-safe-integration.md",
     "docs/pre-tool-judgments.md",
     "docs/output-judgments.md",
@@ -27,7 +28,8 @@
     "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run build && npm test",
-    "validate:plugin": "claude plugin validate . --strict"
+    "validate:plugin": "claude plugin validate . --strict",
+    "bench": "node bench/ask-bench.mjs"
   },
   "license": "BSD-3-Clause",
   "repository": {

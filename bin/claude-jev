@@ -1,18 +1,24 @@
 #!/usr/bin/env node
 
 import * as path from "node:path";
-import { askJev, redact, boundText } from "../dist/client.js";
-import { loadConfig } from "../dist/config.js";
+import { askTypeSafe, TypeSafeError, redact, boundText, isLocalEndpoint } from "../dist/client.js";
+import {
+  DecisionInputError,
+  MAX_DECISION_INPUT_BYTES,
+  parseDecisionRequest,
+} from "../dist/decision.js";
+import { canCallTypeSafe, loadConfig } from "../dist/config.js";
 import { buildGateState } from "../dist/state.js";
 import { sessionStore } from "../dist/hook-io.js";
 import { GATE_QUESTIONS, evaluateGate } from "../dist/gate.js";
+
+const STRICT_COMMANDS = new Set(["check", "ask"]);
 
 function parseArgs(rawArgs) {
   const positionals = [];
   let sessionId;
   let scratchpadDir;
   let cwd;
-  let endpoint;
   let help = false;
 
   for (let i = 0; i < rawArgs.length; i++) {
@@ -32,12 +38,9 @@ function parseArgs(rawArgs) {
       cwd = rawArgs[++i];
     } else if (arg.startsWith("--cwd=")) {
       cwd = arg.slice("--cwd=".length);
-    } else if (arg === "--endpoint" && i + 1 < rawArgs.length) {
-      endpoint = rawArgs[++i];
-    } else if (arg.startsWith("--endpoint=")) {
-      endpoint = arg.slice("--endpoint=".length);
-    } else if (arg.startsWith("-") && positionals[0]?.toLowerCase() !== "check") {
-      // Ignore unknown flags for non-check commands.
+    } else if (arg.startsWith("-") && !STRICT_COMMANDS.has(positionals[0]?.toLowerCase())) {
+      // Ignore unknown flags for non-strict commands. `check` treats them as
+      // text; `ask` rejects them so no flag can override trusted config.
     } else {
       positionals.push(arg);
     }
@@ -50,7 +53,6 @@ function parseArgs(rawArgs) {
     sessionId,
     scratchpadDir,
     cwd,
-    endpoint,
     help,
   };
 }
@@ -66,14 +68,119 @@ Usage:
   claude-jev last --session-id <id>
   claude-jev output --session-id <id>
   claude-jev check <text>
+  claude-jev ask < request.json
 
 Options:
   --session-id <id>        Exact session ID for session state and toggles
   --scratchpad-dir <dir>   Custom scratchpad/cache directory for session state
   --cwd <dir>              Working directory (defaults to current working directory)
-  --endpoint <url>         Custom TypeSafe API endpoint
   -h, --help               Show this help message
+
+ask reads one JSON object {"state": ..., "questions": {...}} from stdin
+(max ${MAX_DECISION_INPUT_BYTES / 1024} KiB), sends it to the configured TypeSafe model in one
+request, and prints {"model", "usage", "answers"} as JSON. It accepts no
+model or endpoint override. Exit 2: invalid input. Exit 1: TypeSafe or
+configuration error.
 `);
+}
+
+function formatGateScores(scores) {
+  const d = scores?.destructive?.toFixed(2) ?? "n/a";
+  const e = scores?.exfiltration?.toFixed(2) ?? "n/a";
+  const b = (scores?.beyond_scope ?? scores?.beyondScope)?.toFixed(2) ?? "n/a";
+  const i = scores?.impact?.toFixed(2) ?? "n/a";
+  const c = scores?.impactConfidence?.toFixed(2) ?? "n/a";
+  return `Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`;
+}
+
+class StdinTooLargeError extends Error {}
+
+/**
+ * Reads stdin as UTF-8, stopping once more than maxBytes arrive so oversized
+ * input is never fully buffered.
+ */
+async function readBoundedStdin(maxBytes) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    total += chunk.length;
+    if (total > maxBytes) {
+      process.stdin.destroy();
+      throw new StdinTooLargeError();
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Describes a failed TypeSafe call by fixed category only: no response body,
+ * submitted state, or question text.
+ */
+function describeTypeSafeFailure(err, model) {
+  const code = err instanceof TypeSafeError ? err.code ?? "UNKNOWN" : "UNEXPECTED";
+  const status = err instanceof TypeSafeError && err.status !== undefined ? `, HTTP ${err.status}` : "";
+  return `no TypeSafe judgment available (${code}${status}) for model ${model}`;
+}
+
+function failAsk(message, exitCode) {
+  console.error(`Error: ${message}`);
+  process.exit(exitCode);
+}
+
+async function runAsk(args, cwd) {
+  if (args.positionals.length > 1) {
+    failAsk("ask takes no arguments or options; send the request JSON on stdin. Model and endpoint come only from ~/.claude/claude-jev.json.", 2);
+  }
+  if (process.stdin.isTTY) {
+    failAsk("ask reads a JSON request from stdin. Usage: claude-jev ask < request.json", 2);
+  }
+
+  let input;
+  try {
+    input = await readBoundedStdin(MAX_DECISION_INPUT_BYTES);
+  } catch (err) {
+    if (err instanceof StdinTooLargeError) {
+      failAsk(`invalid decision request (INPUT_TOO_LARGE): input exceeds ${MAX_DECISION_INPUT_BYTES} bytes`, 2);
+    }
+    failAsk("could not read stdin", 2);
+  }
+
+  const config = loadConfig(cwd);
+  let request;
+  try {
+    request = parseDecisionRequest(input, config.maxStateChars);
+  } catch (err) {
+    if (err instanceof DecisionInputError) {
+      failAsk(`invalid decision request (${err.code}): ${err.message}`, 2);
+    }
+    throw err;
+  }
+
+  if (!canCallTypeSafe(config)) {
+    failAsk("Missing TypeSafe API key. Set TYPESAFE_API_KEY environment variable.", 1);
+  }
+
+  let response;
+  try {
+    response = await askTypeSafe({
+      model: config.model,
+      state: request.state,
+      questions: request.questions,
+      apiKey: config.apiKey,
+      endpoint: config.endpoint,
+      timeoutMs: config.timeoutMs,
+      retries: config.retries,
+    });
+  } catch (err) {
+    // No answers are fabricated.
+    failAsk(describeTypeSafeFailure(err, config.model), 1);
+  }
+
+  const output = { model: response.model };
+  if (response.usage) output.usage = response.usage;
+  output.answers = response.answers;
+  console.log(JSON.stringify(output, null, 2));
 }
 
 async function main() {
@@ -119,7 +226,8 @@ Config:
   Gate: ${config.gate.enabled ? "enabled" : "disabled"} (mode: ${config.gate.mode})
   Gate tools: ${config.gate.tools.join(", ")}
   Output: ${config.output.enabled ? "enabled" : "disabled"} (tools: ${config.output.tools.join(", ")})
-  API key: ${config.apiKey ? "configured" : "not configured"}
+  API key: ${config.apiKey ? "configured" : isLocalEndpoint(config.endpoint) ? "not configured (not required for local endpoint)" : "not configured"}
+  Endpoint: ${isLocalEndpoint(config.endpoint) ? "local" : "remote"}
 Session:
   ${sessionInfo}`);
       break;
@@ -192,12 +300,7 @@ Session:
         console.log(`  Reasons: ${verdict.reasons.join(", ")}`);
       }
       if (verdict.scores && typeof verdict.scores === "object") {
-        const d = verdict.scores.destructive?.toFixed(2) ?? "n/a";
-        const e = verdict.scores.exfiltration?.toFixed(2) ?? "n/a";
-        const b = (verdict.scores.beyond_scope ?? verdict.scores.beyondScope)?.toFixed(2) ?? "n/a";
-        const i = verdict.scores.impact?.toFixed(2) ?? "n/a";
-        const c = verdict.scores.impactConfidence?.toFixed(2) ?? "n/a";
-        console.log(`  Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`);
+        console.log(`  ${formatGateScores(verdict.scores)}`);
       }
       break;
     }
@@ -234,7 +337,7 @@ Session:
       }
 
       const config = loadConfig(cwd);
-      if (!config.apiKey) {
+      if (!canCallTypeSafe(config)) {
         console.error("Error: Missing TypeSafe API key. Set TYPESAFE_API_KEY environment variable.");
         process.exit(1);
       }
@@ -251,12 +354,12 @@ Session:
       });
 
       try {
-        const response = await askJev({
+        const response = await askTypeSafe({
           model: config.model,
           state,
           questions: GATE_QUESTIONS,
           apiKey: config.apiKey,
-          endpoint: args.endpoint ?? config.endpoint,
+          endpoint: config.endpoint,
           timeoutMs: config.timeoutMs,
           retries: config.retries,
         });
@@ -267,18 +370,16 @@ Session:
         if (verdict.reasons.length > 0) {
           console.log(`  Reasons: ${verdict.reasons.join(", ")}`);
         }
-        const d = verdict.scores.destructive?.toFixed(2) ?? "n/a";
-        const e = verdict.scores.exfiltration?.toFixed(2) ?? "n/a";
-        const b = (verdict.scores.beyond_scope ?? verdict.scores.beyondScope)?.toFixed(2) ?? "n/a";
-        const i = verdict.scores.impact?.toFixed(2) ?? "n/a";
-        const c = verdict.scores.impactConfidence?.toFixed(2) ?? "n/a";
-        console.log(`  Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`);
+        console.log(`  ${formatGateScores(verdict.scores)}`);
       } catch (err) {
-        const rawMsg = err?.message || String(err);
-        const safeMsg = redact(rawMsg);
-        console.error(`Error: ${safeMsg}`);
+        console.error(`Error: ${describeTypeSafeFailure(err, config.model)}`);
         process.exit(1);
       }
+      break;
+    }
+
+    case "ask": {
+      await runAsk(args, cwd);
       break;
     }
 
