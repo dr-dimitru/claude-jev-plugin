@@ -211,7 +211,9 @@ describe("Cache and Coordination", () => {
 
     const first = runWorker(400);
     const lockPath = path.join(tempDir, "slow-producer.lock");
-    for (let i = 0; i < 100 && !fs.existsSync(lockPath); i++) {
+    // Allow up to 5 s for the child to start Node and take the lock; a slow
+    // CI runner took over 500 ms.
+    for (let i = 0; i < 1000 && !fs.existsSync(lockPath); i++) {
       await new Promise(resolve => setTimeout(resolve, 5));
     }
     assert.equal(fs.existsSync(lockPath), true);
