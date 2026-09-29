@@ -50,6 +50,10 @@ Example use: impact from 0, no damage, through 3, severe damage.
 
 Batch independent questions into one TypeSafe request. Do not make sequential requests for questions about same state.
 
+## User-requested decisions
+
+When the user asks for help with a decision and wants custom questions, use `/claude-jev:decide`. That skill asks follow-up questions, confirms what leaves the machine, and sends one `claude-jev ask` request. Do not use manual checks for that purpose.
+
 ## Automatic hooks
 
 - `PreToolUse` judges configured Bash, Write, and Edit inputs.

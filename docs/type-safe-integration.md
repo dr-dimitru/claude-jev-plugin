@@ -140,6 +140,28 @@ Content-Type: application/json
 
 Response must contain model, usage, and one typed answer per question. Plugin rejects missing answers, unknown options, incomplete distributions, invalid score legends, non-finite numbers, and probabilities that do not sum to one.
 
+## Decision helper request
+
+`claude-jev ask` uses the same endpoint for user-requested decisions. It reads `{ "state": ..., "questions": {...} }` from stdin and sends one request with all questions. It does not split questions into several requests.
+
+The client sends the configured `model` (default `jev-latest`, an alias for `jev-1.13.0`). Only trusted global configuration sets the model or endpoint. There is no CLI override and no automatic fallback.
+
+The same wire contract works against a local server. Kev (https://github.com/jaredpalmer/kev) and Laya (https://github.com/NandhaKishorM/laya) are open-weight models that serve `POST /v1/systemone` and are not served by TypeSafe. Example global configuration:
+
+```json
+{ "model": "kev-latest", "endpoint": "http://127.0.0.1:8009/v1/systemone" }
+```
+
+```json
+{ "model": "english", "endpoint": "http://127.0.0.1:8000/v1/systemone" }
+```
+
+A local endpoint has hostname `localhost`, `127.x.x.x`, or `[::1]`. Only local endpoints may use plain `http:`. They need no API key, the client sends no Authorization header without one, and `TYPESAFE_API_KEY` is never sent to them. Laya answers omit `type` and add `answer_confidence`. The plugin takes the type from the declared question and drops `answer_confidence`. Kev adds `latency_ms`, which the plugin drops. Laya's README shows only the choice response shape, so noul and score responses are unverified. See the README [Model selection](../README.md#model-selection) section.
+
+The client checks the model family of the response. Family is the text before the first `-`. `jev-latest` answered by `jev-1.13.0` passes. An answer from another family, such as `kev` for a `jev-latest` request, fails with `MODEL_MISMATCH`. An `org/` prefix is ignored, so `jaredpalmer/kev-4b` and `kev-latest` are both family `kev`. Laya names are their own families: `english`, `multilingual`, and `typed`.
+
+Output is limited to `model`, validated answers, and `usage` token counts. The plugin drops other response fields. Probability maps must sum to one within `max(0.05, categories x 0.005)`, and the client renormalizes them. Limits are in the README [Decision helper](../README.md#decision-helper) section.
+
 ## Question primitives
 
 ### Noul
