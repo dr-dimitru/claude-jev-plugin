@@ -1067,6 +1067,22 @@ describe("local models guide", () => {
     assert.match(readText("README.md"), /docs\/local-models\.md/);
   });
 
+  it("links a packaged model comparison backed by raw reports", () => {
+    const pkg = JSON.parse(readText("package.json")) as { files: string[] };
+    assert.ok(pkg.files.includes("docs/benchmarks/model-comparison.md"));
+    assert.match(readText("README.md"), /\]\(docs\/benchmarks\/model-comparison\.md\)/);
+    assert.match(fs.readFileSync(guidePath, "utf8"), /\]\(benchmarks\/model-comparison\.md\)/);
+    const comparison = readText("docs", "benchmarks", "model-comparison.md");
+    const reports = fs.readdirSync(path.join(REPO_ROOT, "docs", "benchmarks", "data"));
+    for (const config of ["hosted-jev", "kev-4b-tuned", "kev-4b-defaults", "kev-0.8b", "laya-english", "laya-typed-decisions"]) {
+      assert.ok(reports.includes(`${config}-r1.json`), `Missing report for ${config}`);
+    }
+    for (const script of ["bench/compare-models.mjs", "bench/summarize-comparison.mjs"]) {
+      assert.ok(comparison.includes(script), `Comparison does not name ${script}`);
+      assert.ok(fs.existsSync(path.join(REPO_ROOT, script)));
+    }
+  });
+
   it("has the pinned commits, loopback flags, and agent prompt", () => {
     const guide = fs.readFileSync(guidePath, "utf8");
     assert.ok(guide.includes("0c142becde423a0c68ec857f7831dac0315588a1"));
