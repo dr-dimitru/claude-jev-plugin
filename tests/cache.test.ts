@@ -10,6 +10,7 @@ import {
   normalizeKey,
   CacheCoordinationError,
   clearMemoryCache,
+  resolveCacheBase,
 } from "../src/cache.ts";
 
 describe("Cache and Coordination", () => {
@@ -210,7 +211,9 @@ describe("Cache and Coordination", () => {
 
     const first = runWorker(400);
     const lockPath = path.join(tempDir, "slow-producer.lock");
-    for (let i = 0; i < 100 && !fs.existsSync(lockPath); i++) {
+    // Allow up to 5 s for the child to start Node and take the lock; a slow
+    // CI runner took over 500 ms.
+    for (let i = 0; i < 1000 && !fs.existsSync(lockPath); i++) {
       await new Promise(resolve => setTimeout(resolve, 5));
     }
     assert.equal(fs.existsSync(lockPath), true);
@@ -338,5 +341,31 @@ describe("Cache and Coordination", () => {
     );
     // Keys 4 and 5 must be present
     assert.ok(files.includes("key-4.json") || files.includes("key-5.json"));
+  });
+});
+
+describe("resolveCacheBase precedence", () => {
+  test("CLAUDE_PLUGIN_DATA is used when no scratchpad", () => {
+    const base = resolveCacheBase({ env: { CLAUDE_PLUGIN_DATA: " /tmp/data " }, homeDir: "/tmp/home" });
+    assert.equal(path.join(base, "cache"), path.join(path.resolve("/tmp/data"), "cache"));
+  });
+  test("scratchpadDir wins over CLAUDE_PLUGIN_DATA", () => {
+    const base = resolveCacheBase({ scratchpadDir: "/tmp/scratch", env: { CLAUDE_PLUGIN_DATA: "/tmp/data" } });
+    assert.equal(base, path.resolve("/tmp/scratch"));
+  });
+  test("falls back to home cache dir", () => {
+    const base = resolveCacheBase({ env: { CLAUDE_PLUGIN_DATA: "  " }, homeDir: "/tmp/home" });
+    assert.equal(path.join(base, "cache"), path.join("/tmp/home", ".cache", "claude-jev", "cache"));
+  });
+  test("getOrCreateCached writes under <data>/cache", async () => {
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), "claude-jev-data-"));
+    try {
+      clearMemoryCache();
+      await getOrCreateCached("k", 5000, async () => "v", { sessionId: "s", env: { CLAUDE_PLUGIN_DATA: data } });
+      assert.equal(fs.existsSync(path.join(data, "cache")), true);
+    } finally {
+      clearMemoryCache();
+      fs.rmSync(data, { recursive: true, force: true });
+    }
   });
 });

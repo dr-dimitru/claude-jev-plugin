@@ -1,59 +1,85 @@
 ---
 name: decide
-description: Use when the user asks for help choosing between meaningful alternatives or Claude faces a consequential choice with uncertainty.
+description: Get TypeSafe semantic evidence for a decision. Runs only when the user asks for help with a decision.
+disable-model-invocation: true
 ---
 
-# Decide with TypeSafe
+# Decide with TypeSafe evidence
 
-Use this skill on demand for a consequential choice with meaningful uncertainty. Do not use it for every tool call, arithmetic, exact lookups, or deterministic work.
+User invokes this skill with `/claude-jev:decide`. Claude never starts it on its own.
 
-## Gather the decision
+TypeSafe output is evidence. It is not fact, user consent, or authorization. Claude gives its own recommendation, labeled as advisory. The user makes the final decision.
 
-State the decision and its realistic alternatives. Check whether the user's goals, constraints, or risk preferences are missing. Ask focused follow-up questions before requesting a TypeSafe judgment when the answer could change the recommendation.
+## When not to use
 
-Before sending a request, explain that its state and questions go to the configured TypeSafe endpoint and may incur API cost. Send only details needed for this decision. Never send conversation history. Leave out secrets and sensitive details. If a sensitive detail is necessary, describe what would be sent and ask the user to confirm before including it.
+Do not call TypeSafe for arithmetic, exact lookups, deterministic checks, or routine tool calls. Answer those with ordinary tools.
 
-## Build one bounded request
+## Workflow
 
-Create one minimal `state` value and one or more independent questions about that same state. `claude-jev ask` sends all questions in one request. Input must stay within 64 KiB, serialized state must stay within configured `maxStateChars` (8,000 by default), and a request can contain at most 32 questions.
+1. State the decision and the alternatives in one or two sentences.
+2. Ask the user focused follow-up questions for any missing goals, constraints, or risk preferences. Ask only what changes the answer. Wait for replies.
+3. Build minimal state: the facts each question needs. Do not include conversation history, transcripts, credentials, tokens, or other secrets.
+4. Show the user a summary of exactly what will be sent to TypeSafe and ask for confirmation. Do this every time, before anything is sent. Flag sensitive details explicitly, such as names, customer data, internal URLs, or business figures. Drop or generalize any detail the user does not approve.
+5. After confirmation, batch all questions for the decision into one `claude-jev ask` call. Send JSON on stdin.
+6. Interpret the validated answers with uncertainty. Report confidence and probabilities, not only the top result.
+7. Give Claude's own recommendation, labeled as advisory. Say where it agrees or differs from TypeSafe and why.
 
-Use Noul for a yes or no probability, Score for an ordered rubric, and Choice for one option among named categories. Run the bundled `claude-jev ask` CLI through the plugin root so it works without a separate PATH install:
+## Request
+
+`claude-jev ask` takes no arguments or flags. It reads one JSON object with `state` and `questions`, sends one request, and prints JSON with `model`, `usage`, and `answers`.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/claude-jev" ask <<'JSON'
+claude-jev ask <<'JSON'
 {
   "state": {
-    "decision": "Which option best fits the user's constraints?",
-    "options": ["Option A", "Option B"],
-    "constraints": ["Keep existing user data intact."]
+    "decision": "Choose a queue for background jobs",
+    "options": {"redis": "Already deployed, no durability tuning", "postgres": "One less service, slower at high volume"},
+    "constraints": ["team of two", "under 200 jobs per minute"]
   },
   "questions": {
-    "option_a_fit": {
-      "type": "score",
-      "instructions": "How well does Option A fit the stated constraints?",
-      "criteria": ["Poor fit", "Mixed fit", "Strong fit"]
-    },
-    "option_b_safe": {
+    "durability_risk": {
       "type": "noul",
-      "instructions": "Can Option B preserve the user's existing data?"
+      "instructions": "Is job loss a serious risk for the redis option?"
     },
-    "best_option": {
+    "ops_burden": {
+      "type": "score",
+      "instructions": "How much operational work does the postgres option add?",
+      "criteria": ["None", "Low", "Moderate", "High"]
+    },
+    "best_fit": {
       "type": "choice",
-      "instructions": "Which option best fits the stated constraints?",
-      "criteria": {
-        "option_a": "Choose Option A.",
-        "option_b": "Choose Option B."
-      }
+      "instructions": "Which option fits the constraints best?",
+      "criteria": {"redis": "Use Redis", "postgres": "Use Postgres"}
     }
   }
 }
 JSON
 ```
 
-The command uses the model, endpoint, key, deadline, and retry settings from trusted user configuration. Jev remains the default model. Do not pass `--model` or `--endpoint`; the command rejects per-request overrides.
+Question types:
 
-## Explain the result
+- `noul`: binary semantic probability. `criteria` is optional and may only use the keys `true` and `false`.
+- `score`: 2 to 10 ordered criteria, given as an array of strings. Answer includes `score`, `legend`, `probabilities`, and `confidence`.
+- `choice`: 2 to 20 options, given as an object of option to description. Answer includes `choice`, `probabilities`, and `confidence`.
 
-The command writes JSON with the resolved model, usage, and validated answers. Explain the useful answer fields and uncertainty. Give Claude's own recommendation against the user's goals and constraints.
+Limits:
 
-Treat TypeSafe results as advisory evidence. They are not facts, user consent, or permission to use a tool. If the request fails or returns an invalid answer, report that no TypeSafe judgment is available. Continue with ordinary reasoning, do not call another model automatically, and do not invent answers.
+- Input is at most 64 KiB (UTF-8 bytes).
+- Serialized `state` is at most `maxStateChars` (default 8000).
+- 1 to 32 questions.
+- Question names match `^[A-Za-z][A-Za-z0-9_]{0,63}$`.
+- `instructions` is at most 2000 characters. Each criterion is at most 500 characters.
+
+State and questions go to the configured model's server, either TypeSafe or a local server. TypeSafe bills each request it serves. Retries resend the full body.
+
+## Exit codes
+
+- `0`: success. Read `answers`.
+- `2`: invalid input. No request was sent. Fix the request and confirm any changed content again.
+- `1`: TypeSafe or configuration error. Errors show only a fixed category, code, HTTP status, and model.
+
+On any nonzero exit, tell the user no TypeSafe judgment was available and continue with ordinary reasoning. Do not retry with another model. There is no automatic model fallback, and the model comes from trusted global configuration only. Never invent answers.
+
+## Reporting
+
+Lead with the decision and Claude's advisory recommendation. Then list each TypeSafe answer with its probabilities and confidence. Note low confidence or close probabilities as real uncertainty. Ask the user which way to go.

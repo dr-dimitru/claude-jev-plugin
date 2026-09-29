@@ -14,7 +14,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { sessionStore } from "../hook-io.js";
-import { loadConfig } from "../config.js";
+import { canCallTypeSafe, loadConfig } from "../config.js";
 import { buildGateState } from "../state.js";
 import { GATE_QUESTIONS, evaluateGate, judgmentKey } from "../gate.js";
 import { getOrCreateCached } from "../cache.js";
@@ -66,7 +66,7 @@ export async function runPreTool(rawPayload, options) {
             return null; // Tool not configured for gating
         }
         // 4. Missing API key check
-        if (!config.apiKey || config.apiKey.trim().length === 0) {
+        if (!canCallTypeSafe(config)) {
             return await emitDiagnostic("MISSING_KEY", store);
         }
         // 5. Build bounded gate state

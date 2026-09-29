@@ -2,35 +2,20 @@ import test, { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   askJev,
-  askTypeSafe,
   isRetryableStatus,
   registerApiKey,
   clearRegisteredApiKeys,
   redact,
   JevError,
-  TypeSafeError,
   DEFAULT_ENDPOINT,
   DEFAULT_MODEL,
-  DEFAULT_TYPESAFE_MODEL,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_RETRIES,
   parseRetryAfter,
   validateJevResponse,
-  validateTypeSafeResponse,
   type JevCall,
   type JevQuestion,
   type JevResponse,
-  type TypeSafeAnswer,
-  type TypeSafeCall,
-  type TypeSafeChoiceAnswer,
-  type TypeSafeChoiceQuestion,
-  type TypeSafeNoulAnswer,
-  type TypeSafeNoulQuestion,
-  type TypeSafeQuestion,
-  type TypeSafeResponse,
-  type TypeSafeScoreAnswer,
-  type TypeSafeScoreQuestion,
-  type TypeSafeUsage,
 } from "../src/client.ts";
 
 describe("TypeSafe Jev Client", () => {
@@ -53,55 +38,9 @@ describe("TypeSafe Jev Client", () => {
   describe("Constants and defaults", () => {
     it("exports default constants", () => {
       assert.equal(DEFAULT_MODEL, "jev-latest");
-      assert.equal(DEFAULT_TYPESAFE_MODEL, DEFAULT_MODEL);
       assert.equal(DEFAULT_ENDPOINT, "https://api.typesafe.ai/v1/systemone");
       assert.equal(DEFAULT_TIMEOUT_MS, 15000);
       assert.equal(DEFAULT_RETRIES, 2);
-    });
-
-    it("exports model-neutral names and preserves Jev aliases", () => {
-      const noulQuestion: TypeSafeNoulQuestion = {
-        type: "noul",
-        instructions: "Does this fit?",
-      };
-      const scoreQuestion: TypeSafeScoreQuestion = {
-        type: "score",
-        instructions: "How well does this fit?",
-        criteria: ["poor", "strong"],
-      };
-      const choiceQuestion: TypeSafeChoiceQuestion = {
-        type: "choice",
-        instructions: "Which option fits?",
-        criteria: { first: "First", second: "Second" },
-      };
-      const question: TypeSafeQuestion = noulQuestion;
-      const call: TypeSafeCall = { state: {}, questions: { q: question } };
-      const answers: Record<string, TypeSafeAnswer> = {
-        noul: { type: "noul", noul: 0.5 } satisfies TypeSafeNoulAnswer,
-        choice: {
-          type: "choice",
-          choice: "first",
-          probabilities: { first: 1 },
-          confidence: 1,
-        } satisfies TypeSafeChoiceAnswer,
-        score: {
-          type: "score",
-          score: 0,
-          legend: { "0": "poor", "1": "strong" },
-          probabilities: { "0": 1, "1": 0 },
-          confidence: 1,
-        } satisfies TypeSafeScoreAnswer,
-      };
-      const usage: TypeSafeUsage = { input_tokens: 1, output_tokens: 0 };
-      const response: TypeSafeResponse = { model: "jev-latest", answers, usage };
-
-      assert.equal(askJev, askTypeSafe);
-      assert.equal(JevError, TypeSafeError);
-      assert.equal(validateJevResponse, validateTypeSafeResponse);
-      assert.equal(call.questions.q.type, "noul");
-      assert.equal(scoreQuestion.criteria.length, 2);
-      assert.equal(choiceQuestion.criteria.first, "First");
-      assert.equal(response.model, "jev-latest");
     });
   });
 
@@ -191,57 +130,6 @@ describe("TypeSafe Jev Client", () => {
 
       assert.equal(capturedUrl, "https://custom.endpoint.ai/v1/systemone");
       assert.equal(capturedModel, "jev-custom-preview");
-    });
-
-    it("sends a configured model ID unchanged through askTypeSafe", async () => {
-      let capturedModel = "";
-      const model = "provider/custom-model-v2";
-
-      const mockFetch: typeof fetch = async (_input, init) => {
-        capturedModel = JSON.parse(String(init?.body)).model;
-        return new Response(
-          JSON.stringify({
-            model,
-            answers: { q1: { type: "noul", noul: 0.5 } },
-            usage: { input_tokens: 1, output_tokens: 0 },
-          }),
-          { status: 200 }
-        );
-      };
-
-      await askTypeSafe({
-        apiKey: "test-key",
-        model,
-        state: {},
-        questions: { q1: { type: "noul", instructions: "test" } },
-        fetch: mockFetch,
-      });
-
-      assert.equal(capturedModel, model);
-    });
-
-    it("does not fall back to Jev when the selected model is unavailable", async () => {
-      const selectedModel = "provider/unavailable-model";
-      const attemptedModels: string[] = [];
-
-      await assert.rejects(
-        askTypeSafe({
-          apiKey: "test-key",
-          model: selectedModel,
-          state: {},
-          questions: { q1: { type: "noul", instructions: "test" } },
-          fetch: async (_input, init) => {
-            attemptedModels.push(JSON.parse(String(init?.body)).model);
-            return new Response("model unavailable", { status: 404 });
-          },
-        }),
-        (error: unknown) =>
-          error instanceof TypeSafeError &&
-          error.status === 404 &&
-          error.code === "HTTP_404"
-      );
-
-      assert.deepEqual(attemptedModels, [selectedModel]);
     });
 
     it("rejects non-HTTPS endpoints before fetch", async () => {
@@ -1442,5 +1330,358 @@ describe("TypeSafe Jev Client", () => {
       assert.equal(redact(""), "");
       assert.equal(redact("plain text without secrets"), "plain text without secrets");
     });
+  });
+});
+
+describe("Model-neutral TypeSafe client API", async () => {
+  const client = await import("../src/client.ts");
+  const usage = { input_tokens: 1, output_tokens: 1 };
+  const noulQuestion = { q: { type: "noul" as const, instructions: "Is it?" } };
+
+  const respondWith = (body: unknown, calls: string[] = []): typeof fetch =>
+    async (_input, init) => {
+      calls.push(JSON.parse(String(init?.body)).model);
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+  it("keeps Jev-named exports as aliases of the TypeSafe names", () => {
+    assert.equal(client.askJev, client.askTypeSafe);
+    assert.equal(client.JevError, client.TypeSafeError);
+    assert.equal(client.validateJevResponse, client.validateTypeSafeResponse);
+    assert.equal(client.DEFAULT_MODEL, client.DEFAULT_TYPESAFE_MODEL);
+    assert.equal(client.DEFAULT_TYPESAFE_MODEL, "jev-latest");
+    const err = new client.TypeSafeError("x");
+    assert.ok(err instanceof client.JevError);
+  });
+
+  it("sends a configured non-empty model ID unchanged", async () => {
+    const calls: string[] = [];
+    const res = await client.askTypeSafe({
+      apiKey: "k",
+      model: "kev-4b-custom",
+      state: "s",
+      questions: noulQuestion,
+      fetch: respondWith({ model: "kev-4b", answers: { q: { type: "noul", noul: 0.2 } }, usage }, calls),
+    });
+    assert.deepEqual(calls, ["kev-4b-custom"]);
+    assert.equal(res.model, "kev-4b");
+  });
+
+  it("accepts a resolved versioned ID in the same model family", async () => {
+    const res = await client.askTypeSafe({
+      apiKey: "k",
+      state: "s",
+      questions: noulQuestion,
+      fetch: respondWith({ model: "jev-1.13.0", answers: { q: { type: "noul", noul: 0.2 } }, usage }),
+    });
+    assert.equal(res.model, "jev-1.13.0");
+  });
+
+  it("rejects a cross-family model substitution without retrying under another model", async () => {
+    const calls: string[] = [];
+    await assert.rejects(
+      client.askTypeSafe({
+        apiKey: "k",
+        model: "jev-latest",
+        state: "s",
+        questions: noulQuestion,
+        retries: 2,
+        fetch: respondWith({ model: "kev-latest", answers: { q: { type: "noul", noul: 0.2 } }, usage }, calls),
+      }),
+      (error: unknown) =>
+        error instanceof client.TypeSafeError && error.code === "MODEL_MISMATCH"
+    );
+    assert.deepEqual(calls, ["jev-latest"]);
+  });
+
+  it("returns an unavailable selected model as an error with one request and no Jev fallback", async () => {
+    const calls: string[] = [];
+    await assert.rejects(
+      client.askTypeSafe({
+        apiKey: "k",
+        model: "kev-latest",
+        state: "s",
+        questions: noulQuestion,
+        fetch: async (_input, init) => {
+          calls.push(JSON.parse(String(init?.body)).model);
+          return new Response("unknown model", { status: 422 });
+        },
+      }),
+      (error: unknown) => error instanceof client.TypeSafeError && error.status === 422
+    );
+    assert.deepEqual(calls, ["kev-latest"]);
+  });
+
+  it("drops unrequested top-level, answer, and usage fields", () => {
+    const res = client.validateTypeSafeResponse(
+      {
+        model: "jev-1.13.0",
+        extra: "should not pass",
+        answers: { q: { type: "noul", noul: 0.1 }, other: { type: "noul", noul: 0.9 } },
+        usage: { input_tokens: 3, output_tokens: 4, note: "drop" },
+      },
+      noulQuestion
+    );
+    assert.deepEqual(res, {
+      model: "jev-1.13.0",
+      answers: { q: { type: "noul", noul: 0.1 } },
+      usage: { input_tokens: 3, output_tokens: 4 },
+    });
+  });
+
+  it("does not treat inherited properties as answers", () => {
+    assert.throws(
+      () =>
+        client.validateTypeSafeResponse(
+          { model: "jev-1.13.0", answers: {}, usage },
+          { toString: { type: "noul", instructions: "x" } }
+        ),
+      /missing answer for question 'toString'/
+    );
+  });
+
+  it("bounds server-supplied answer types in error messages", () => {
+    const longType = "x".repeat(5000);
+    assert.throws(
+      () =>
+        client.validateTypeSafeResponse(
+          { model: "jev-1.13.0", answers: { q: { type: longType } }, usage },
+          noulQuestion
+        ),
+      (error: unknown) => error instanceof Error && error.message.length < 300
+    );
+  });
+
+  it("scales probability tolerance with the number of categories", () => {
+    assert.equal(client.probabilityTolerance(3), client.PROBABILITY_SUM_TOLERANCE);
+    const criteria: Record<string, null> = {};
+    const probabilities: Record<string, number> = {};
+    // 20 categories summing to 1.09: beyond the fixed 0.05 base tolerance but
+    // within the 20 x 0.005 = 0.10 two-decimal rounding bound.
+    for (let i = 0; i < 20; i++) {
+      criteria[`c${i}`] = null;
+      probabilities[`c${i}`] = i === 0 ? 0.14 : 0.05;
+    }
+    const res = client.validateTypeSafeResponse(
+      {
+        model: "jev-1.13.0",
+        answers: { q: { type: "choice", choice: "c0", probabilities, confidence: 0.5 } },
+        usage,
+      },
+      { q: { type: "choice", instructions: "Pick", criteria } }
+    );
+    const total = Object.values((res.answers.q as { probabilities: Record<string, number> }).probabilities)
+      .reduce((s, v) => s + v, 0);
+    assert.ok(Math.abs(total - 1) < 1e-9);
+    probabilities.c0 = 0.2; // sum 1.15, beyond 20 x 0.005
+    assert.throws(
+      () =>
+        client.validateTypeSafeResponse(
+          {
+            model: "jev-1.13.0",
+            answers: { q: { type: "choice", choice: "c0", probabilities, confidence: 0.5 } },
+            usage,
+          },
+          { q: { type: "choice", instructions: "Pick", criteria } }
+        ),
+      /probabilities must sum to 1/
+    );
+  });
+});
+
+describe("Local System One servers", async () => {
+  const client = await import("../src/client.ts");
+  const usage = { input_tokens: 1, output_tokens: 1 };
+  const originalEnvKey = process.env.TYPESAFE_API_KEY;
+
+  const capture = (body: unknown, seen: { url?: string; headers?: Record<string, string> }): typeof fetch =>
+    async (input, init) => {
+      seen.url = String(input);
+      seen.headers = init?.headers as Record<string, string>;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+  it("classifies loopback endpoints as local", () => {
+    for (const url of [
+      "http://localhost:8009/v1/systemone",
+      "http://127.0.0.1:8000/v1/systemone",
+      "http://127.1.2.3/v1/systemone",
+      "http://[::1]:8009/v1/systemone",
+      "https://localhost/v1/systemone",
+    ]) {
+      assert.equal(client.isLocalEndpoint(url), true, url);
+      assert.doesNotThrow(() => client.validateEndpoint(url), url);
+    }
+    for (const url of [
+      "https://api.typesafe.ai/v1/systemone",
+      "http://localhost.evil.test/v1/systemone",
+      "http://127.0.0.1.evil.test/v1/systemone",
+      "http://0.0.0.0:8000/v1/systemone",
+      "not a url",
+    ]) {
+      assert.equal(client.isLocalEndpoint(url), false, url);
+    }
+  });
+
+  it("rejects plain HTTP for non-loopback hosts", () => {
+    for (const url of [
+      "http://api.typesafe.ai/v1/systemone",
+      "http://192.168.1.10:8000/v1/systemone",
+      "http://0.0.0.0:8000/v1/systemone",
+      "http://localhost.evil.test/v1/systemone",
+      "http://user:pass@localhost:8009/v1/systemone",
+    ]) {
+      assert.throws(() => client.validateEndpoint(url), /INVALID_ENDPOINT|HTTPS/, url);
+    }
+  });
+
+  it("calls a local Kev server without a key or Authorization header, ignoring TYPESAFE_API_KEY", async () => {
+    process.env.TYPESAFE_API_KEY = "typesafe-secret";
+    try {
+      const seen: { url?: string; headers?: Record<string, string> } = {};
+      const res = await client.askTypeSafe({
+        model: "jaredpalmer/kev-4b",
+        endpoint: "http://127.0.0.1:8009/v1/systemone",
+        state: "s",
+        questions: { q: { type: "noul", instructions: "Is it?" } },
+        fetch: capture(
+          { model: "kev-latest", answers: { q: { type: "noul", noul: 0.93 } }, usage, latency_ms: 495 },
+          seen
+        ),
+      });
+      assert.equal(seen.url, "http://127.0.0.1:8009/v1/systemone");
+      assert.equal(seen.headers?.Authorization, undefined);
+      assert.equal(res.model, "kev-latest");
+      assert.equal("latency_ms" in res, false);
+    } finally {
+      if (originalEnvKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = originalEnvKey;
+    }
+  });
+
+  it("sends an explicit key to a local server that requires one", async () => {
+    const seen: { url?: string; headers?: Record<string, string> } = {};
+    await client.askTypeSafe({
+      apiKey: "kev-secret",
+      model: "kev-latest",
+      endpoint: "http://localhost:8009/v1/systemone",
+      state: "s",
+      questions: { q: { type: "noul", instructions: "Is it?" } },
+      fetch: capture({ model: "kev-latest", answers: { q: { type: "noul", noul: 0.1 } }, usage }, seen),
+    });
+    assert.equal(seen.headers?.Authorization, "Bearer kev-secret");
+  });
+
+  it("still requires a key for remote endpoints", async () => {
+    delete process.env.TYPESAFE_API_KEY;
+    try {
+      await assert.rejects(
+        client.askTypeSafe({
+          state: "s",
+          questions: { q: { type: "noul", instructions: "Is it?" } },
+          fetch: capture({}, {}),
+        }),
+        (error: unknown) => error instanceof client.TypeSafeError && error.code === "MISSING_KEY"
+      );
+    } finally {
+      if (originalEnvKey !== undefined) process.env.TYPESAFE_API_KEY = originalEnvKey;
+    }
+  });
+
+  it("accepts a Laya choice answer without a type field", async () => {
+    const res = await client.askTypeSafe({
+      model: "english",
+      endpoint: "http://127.0.0.1:8000/v1/systemone",
+      state: { body: "billed twice, refund please or we cancel" },
+      questions: {
+        dept: { type: "choice", instructions: "which team?", criteria: { billing: "refunds", tech: "bugs" } },
+      },
+      fetch: capture(
+        {
+          model: "english",
+          answers: {
+            dept: {
+              choice: "billing",
+              confidence: 0.94,
+              answer_confidence: 0.94,
+              probabilities: { billing: 0.94, tech: 0.06 },
+            },
+          },
+          usage: { input_tokens: 45, output_tokens: 0 },
+        },
+        {}
+      ),
+    });
+    assert.deepEqual(res.answers.dept, {
+      type: "choice",
+      choice: "billing",
+      probabilities: { billing: 0.94, tech: 0.06 },
+      confidence: 0.94,
+    });
+  });
+
+  it("still requires a type when no question is declared", () => {
+    assert.throws(
+      () => client.validateTypeSafeResponse({ model: "english", answers: { q: { noul: 0.2 } }, usage }),
+      /missing answer type/
+    );
+  });
+
+  it("groups org-prefixed and versioned IDs by family", () => {
+    assert.equal(client.modelFamily("jaredpalmer/kev-4b"), "kev");
+    assert.equal(client.modelFamily("kev-latest"), "kev");
+    assert.equal(client.modelFamily("jev-1.13.0"), "jev");
+    assert.equal(client.modelFamily("english"), "english");
+    assert.equal(client.modelFamily("typed-decisions"), "typed");
+    assert.notEqual(client.modelFamily("english"), client.modelFamily("multilingual"));
+  });
+});
+
+describe("Model check for local servers", async () => {
+  const client = await import("../src/client.ts");
+  const usage = { input_tokens: 1, output_tokens: 0 };
+
+  it("accepts a local server that reports its own checkpoint name", async () => {
+    const res = await client.askTypeSafe({
+      model: "english",
+      endpoint: "http://127.0.0.1:8000/v1/systemone",
+      state: "s",
+      questions: { q: { type: "noul", instructions: "Is it?" } },
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            model: "laya-rl-agent",
+            routing: { model: "english", reason: "explicit model='english'" },
+            answers: { q: { type: "noul", noul: 0.4, confidence: 0.8, answer_confidence: 0.9 } },
+            usage,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        ),
+    });
+    assert.equal(res.model, "laya-rl-agent");
+    assert.deepEqual(res.answers.q, { type: "noul", noul: 0.4 });
+  });
+
+  it("still rejects a cross-family answer from a remote endpoint", async () => {
+    await assert.rejects(
+      client.askTypeSafe({
+        apiKey: "k",
+        model: "jev-latest",
+        state: "s",
+        questions: { q: { type: "noul", instructions: "Is it?" } },
+        fetch: async () =>
+          new Response(
+            JSON.stringify({ model: "laya-rl-agent", answers: { q: { type: "noul", noul: 0.4 } }, usage }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          ),
+      }),
+      (error: unknown) => error instanceof client.TypeSafeError && error.code === "MODEL_MISMATCH"
+    );
   });
 });

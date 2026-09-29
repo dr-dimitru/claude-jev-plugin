@@ -60,6 +60,20 @@ function toSafeKey(key) {
     }
     return normalizeKey(key);
 }
+/**
+ * Returns the directory whose "cache" subdirectory holds per-session caches.
+ */
+export function resolveCacheBase(options) {
+    const env = options?.env ?? process.env;
+    if (options?.scratchpadDir && options.scratchpadDir.trim().length > 0) {
+        return path.resolve(options.scratchpadDir.trim());
+    }
+    if (env.CLAUDE_PLUGIN_DATA?.trim()) {
+        return path.resolve(env.CLAUDE_PLUGIN_DATA.trim());
+    }
+    const userHome = options?.homeDir ?? env.HOME ?? os.homedir();
+    return path.join(userHome, ".cache", "claude-jev");
+}
 function resolveCacheDir(options) {
     const sessionIdentity = options?.agentId
         ? `${options.sessionId ?? "default"}:${options.agentId}`
@@ -71,11 +85,7 @@ function resolveCacheDir(options) {
     if (options?.cacheDir && options.cacheDir.trim().length > 0) {
         return path.resolve(options.cacheDir.trim());
     }
-    if (options?.scratchpadDir && options.scratchpadDir.trim().length > 0) {
-        return path.join(path.resolve(options.scratchpadDir.trim()), "cache", sessionPart);
-    }
-    const userHome = options?.homeDir ?? process.env.HOME ?? os.homedir();
-    return path.join(userHome, ".cache", "claude-jev", "cache", sessionPart);
+    return path.join(resolveCacheBase(options), "cache", sessionPart);
 }
 function ensureDirSync(dir) {
     if (!fs.existsSync(dir)) {

@@ -2,7 +2,7 @@
 
 Status: Implemented and reviewed against current Claude Code and TypeSafe documentation.
 
-`claude-jev` ports the decision parts of `@y0usaf/pi-jev` to Claude Code. Claude Code invokes local command hooks. Those hooks call the model-neutral `askTypeSafe` client to send one bounded JSON request to TypeSafe System One over HTTPS. Jev remains the default model. The plugin does not define an MCP server, an MCP tool, or a persistent MCP process.
+`claude-jev` ports the decision parts of `@y0usaf/pi-jev` to Claude Code. Claude Code invokes local command hooks. Those hooks send one bounded JSON request directly to TypeSafe Jev over HTTPS. The plugin does not define an MCP server, an MCP tool, or a persistent MCP process.
 
 ## Lifecycle mapping
 
@@ -152,7 +152,7 @@ The normalized output uses `error` as output text and sets `is_error: true`. It 
 
 `tool_use_id` is recorded in bounded session state. If a future Claude Code version emits overlapping success and failure events, the second event is not judged again.
 
-## TypeSafe questions and verdict composition
+## Jev questions and verdict composition
 
 The client posts to the current documented endpoint:
 
@@ -162,7 +162,7 @@ Authorization: Bearer $TYPESAFE_API_KEY
 Content-Type: application/json
 ```
 
-The default model is `jev-latest`. TypeSafe's current [model docs](https://docs.typesafe.ai/models) list Jev and its aliases. `GET /v1/models` returns the names available to an account. The `askTypeSafe` client sends a non-empty configured ID unchanged and does not switch models after an error. Confirm other IDs against the [System One response contract](https://docs.typesafe.ai/api) before selecting them. The client validates the response before any verdict code reads it. All questions for one state go in one request. TypeSafe evaluates them independently, so the hook does not make four gate requests or two output requests.
+The default model is `jev-latest`. The client validates the response before any verdict code reads it. All questions for one state go in one request. TypeSafe evaluates them independently, so the hook does not make four gate requests or two output requests.
 
 ### Pre-tool gate
 
@@ -347,7 +347,7 @@ The environment overrides any configured key source. The default configuration i
 }
 ```
 
-Trusted global configuration may set `model`, `endpoint`, `timeoutMs`, `retries`, and `apiKeyFile`. Project configuration cannot set these fields or any API key. Every endpoint must use HTTPS without embedded credentials. `TYPESAFE_API_KEY` is the preferred secret source; plaintext JSON `apiKey` is not accepted. Relative global `apiKeyFile` paths resolve under `~/.claude`.
+Trusted global configuration may set `model`, `endpoint`, `timeoutMs`, `retries`, and `apiKeyFile`. Project configuration cannot set these fields or any API key. Remote endpoints must use HTTPS. Plain `http:` is allowed only for a local endpoint (`localhost`, `127.x.x.x`, or `[::1]`). No endpoint may contain embedded credentials. A local endpoint needs no API key, gets no Authorization header without one, and never receives `TYPESAFE_API_KEY`. Local open-weight models such as Kev (https://github.com/jaredpalmer/kev) and Laya (https://github.com/NandhaKishorM/laya) can serve the same `POST /v1/systemone` contract. The client takes the answer type from the declared question and drops extra response fields such as `answer_confidence` and `latency_ms`. `TYPESAFE_API_KEY` is the preferred secret source; plaintext JSON `apiKey` is not accepted. Relative global `apiKeyFile` paths resolve under `~/.claude`.
 
 Session overrides, last verdicts, recent prompt text, cache entries, in-flight lock metadata, and warning timestamps are local state. Root precedence is hook `scratchpad_dir`, then `CLAUDE_PLUGIN_DATA/sessions`, then legacy fallback `~/.cache/claude-jev`. A session filename is a hash of `session_id` and `agent_id`, never the raw identifier. Per-session locks serialize mutations; atomic rename protects complete records. State is not sent to TypeSafe except for selected prompt and tool fields described above.
 
@@ -450,6 +450,7 @@ claude-jev/
 │   └── claude-jev
 ├── src/
 │   ├── client.ts
+│   ├── decision.ts
 │   ├── config.ts
 │   ├── gate.ts
 │   ├── output.ts
@@ -462,12 +463,15 @@ claude-jev/
 │       ├── post-tool.ts
 │       └── post-tool-failure.ts
 ├── skills/
-│   └── jev/
+│   ├── jev/
+│   │   └── SKILL.md
+│   └── decide/
 │       └── SKILL.md
 ├── docs/
 │   └── architecture.md
 ├── tests/
 │   ├── client.test.ts
+│   ├── decision.test.ts
 │   ├── config.test.ts
 │   ├── state.test.ts
 │   ├── hook-io.test.ts
@@ -487,6 +491,16 @@ claude-jev/
 ```
 
 Compiled `dist/` files are build artifacts and are not hand-edited. The published plugin must include them or use its package installation build step before hooks run.
+
+## Decision helper
+
+`src/decision.ts` validates `claude-jev ask` input. It enforces the 64 KiB input limit, the `maxStateChars` state limit, 1 to 32 questions, name and length rules, Score 2 to 10 criteria, Choice 2 to 20 criteria, and Noul `true`/`false` criteria. Invalid input exits with code 2 before any request.
+
+`src/client.ts` is model-neutral. It exports `askTypeSafe`, `TypeSafeError`, `TypeSafeQuestion`, `TypeSafeResponse`, `validateTypeSafeResponse`, and `DEFAULT_TYPESAFE_MODEL`. Jev-named exports remain as deprecated aliases. The client sends the configured model once per attempt and rejects an answer from another model family with `MODEL_MISMATCH`. It reduces responses to model, validated answers, and usage token counts.
+
+`claude-jev ask` in `bin/claude-jev` reads one JSON object from stdin, sends one request with all questions, and prints `model`, `usage`, and `answers`. Exit code 0 is success, 2 is invalid input, and 1 is a TypeSafe or configuration error. Errors never include response bodies, state, or question text.
+
+`skills/decide/SKILL.md` is user-invoked only (`disable-model-invocation: true`). It confirms what will be sent before every request and treats results as advisory evidence.
 
 ## Implementation status
 

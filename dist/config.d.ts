@@ -20,18 +20,27 @@ export interface GateConfig {
     blockOn: GateBlockOnConfig;
     blockWithoutUI: boolean;
 }
+/**
+ * How successful tool output is checked for secrets.
+ * - "prefilter": send it to TypeSafe only when a local scan finds
+ *   credential-like text or the command reads secrets.
+ * - "always": send every successful output to TypeSafe.
+ */
+export type OutputSuccessCheck = "prefilter" | "always";
 export interface OutputConfig {
     enabled: boolean;
     tools: string[];
     outputChars: number;
     leakThreshold: number;
     minConfidence: number;
+    successCheck: OutputSuccessCheck;
 }
 export interface LoadedConfig {
     model: string;
     endpoint: string;
     timeoutMs: number;
     retries: number;
+    retentionDays: number;
     maxStateChars: number;
     apiKey?: string;
     apiKeyFile?: string;
@@ -50,4 +59,12 @@ export declare const DEFAULT_CONFIG: LoadedConfig;
  * Loads and validates configuration with standard precedence:
  * defaults -> ~/.claude/claude-jev.json -> <cwd>/.claude/claude-jev.json -> apiKeyFile -> env.TYPESAFE_API_KEY
  */
+/**
+ * Returns true when a TypeSafe call can be attempted: an API key is
+ * configured, or the endpoint is a local server that needs none.
+ */
+export declare function canCallTypeSafe(config: {
+    apiKey?: string;
+    endpoint?: string;
+}): boolean;
 export declare function loadConfig(cwd?: string, options?: ConfigOptions): LoadedConfig;

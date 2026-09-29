@@ -1,110 +1,178 @@
+/** Maximum raw request size in UTF-8 bytes. */
 export const MAX_DECISION_INPUT_BYTES = 64 * 1024;
+/** Maximum number of questions per request. */
 export const MAX_DECISION_QUESTIONS = 32;
-const INVALID_JSON = "Invalid decision request: invalid JSON.";
-const INVALID_TOP_LEVEL = "Invalid decision request: expected only state and questions.";
-const INVALID_STATE = "Invalid decision request: state is missing or exceeds its configured limit.";
-const INVALID_QUESTIONS = "Invalid decision request: questions must contain 1 to 32 entries.";
-const INVALID_QUESTION = "Invalid decision request: question definition is invalid.";
-const INPUT_TOO_LARGE = "Invalid decision request: input exceeds 64 KiB.";
+/** TypeSafe Score accepts at least two levels, up to 10. */
+export const MIN_SCORE_CRITERIA = 2;
+export const MAX_SCORE_CRITERIA = 10;
+/**
+ * Plugin cap for Choice categories. The API allows 255, but two-decimal
+ * probability rounding drift grows 0.005 per category, so a lower cap keeps
+ * the response sum check meaningful.
+ */
+export const MIN_CHOICE_CRITERIA = 2;
+export const MAX_CHOICE_CRITERIA = 20;
+export const MAX_INSTRUCTIONS_CHARS = 2000;
+export const MAX_CRITERION_CHARS = 500;
+const MAX_CHOICE_KEY_CHARS = 64;
+export const QUESTION_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const FORBIDDEN_NAMES = new Set([
+    "__proto__",
+    "constructor",
+    "prototype",
+    "hasOwnProperty",
+    "toString",
+    "valueOf",
+]);
+/** Input validation failure. Messages never include submitted content. */
 export class DecisionInputError extends Error {
-    constructor(message) {
+    code;
+    constructor(message, code) {
         super(message);
         this.name = "DecisionInputError";
+        this.code = code;
+        Object.setPrototypeOf(this, DecisionInputError.prototype);
     }
 }
-function isRecord(value) {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
+function isPlainObject(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function isSafeName(name) {
-    return name.trim().length > 0 &&
-        name !== "__proto__" &&
-        name !== "constructor" &&
-        name !== "prototype";
+function invalid(name, rule) {
+    return new DecisionInputError(`Invalid question '${name}': ${rule}`, "INVALID_QUESTION");
 }
-function isNonEmptyText(value) {
-    return typeof value === "string" && value.trim().length > 0;
+function isCriterionText(value) {
+    return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_CRITERION_CHARS;
 }
-function validateNoulCriteria(criteria) {
-    if (criteria === undefined)
-        return true;
-    if (!isRecord(criteria))
-        return false;
-    for (const [key, value] of Object.entries(criteria)) {
-        if ((key !== "true" && key !== "false") || !isNonEmptyText(value)) {
-            return false;
+function parseNoulCriteria(name, raw) {
+    if (raw === undefined)
+        return undefined;
+    if (!isPlainObject(raw))
+        throw invalid(name, "criteria must be an object");
+    const out = {};
+    for (const key of Object.keys(raw)) {
+        if (key !== "true" && key !== "false") {
+            throw invalid(name, "criteria may only contain 'true' and 'false'");
+        }
+        const value = raw[key];
+        if (!isCriterionText(value)) {
+            throw invalid(name, `criteria '${key}' must be a non-empty string of at most ${MAX_CRITERION_CHARS} chars`);
+        }
+        out[key] = value;
+    }
+    return out;
+}
+function parseScoreCriteria(name, raw) {
+    if (!Array.isArray(raw) || raw.length < MIN_SCORE_CRITERIA || raw.length > MAX_SCORE_CRITERIA) {
+        throw invalid(name, `criteria must be an array of ${MIN_SCORE_CRITERIA} to ${MAX_SCORE_CRITERIA} strings`);
+    }
+    return raw.map((item) => {
+        if (!isCriterionText(item)) {
+            throw invalid(name, `each criterion must be a non-empty string of at most ${MAX_CRITERION_CHARS} chars`);
+        }
+        return item;
+    });
+}
+function parseChoiceCriteria(name, raw) {
+    if (!isPlainObject(raw))
+        throw invalid(name, "criteria must be an object");
+    const keys = Object.keys(raw);
+    if (keys.length < MIN_CHOICE_CRITERIA || keys.length > MAX_CHOICE_CRITERIA) {
+        throw invalid(name, `criteria must have ${MIN_CHOICE_CRITERIA} to ${MAX_CHOICE_CRITERIA} entries`);
+    }
+    const out = {};
+    for (const key of keys) {
+        if (key.length === 0 || key.length > MAX_CHOICE_KEY_CHARS || FORBIDDEN_NAMES.has(key)) {
+            throw invalid(name, `category names must be 1 to ${MAX_CHOICE_KEY_CHARS} chars and not reserved`);
+        }
+        const value = raw[key];
+        if (value !== null && !isCriterionText(value)) {
+            throw invalid(name, `category descriptions must be null or a non-empty string of at most ${MAX_CRITERION_CHARS} chars`);
+        }
+        out[key] = value;
+    }
+    return out;
+}
+function parseQuestion(name, raw) {
+    if (!isPlainObject(raw))
+        throw invalid(name, "must be an object");
+    for (const key of Object.keys(raw)) {
+        if (key !== "type" && key !== "instructions" && key !== "criteria") {
+            throw new DecisionInputError(`Unknown field in question '${name}'`, "UNKNOWN_QUESTION_FIELD");
         }
     }
-    return true;
-}
-function validateScoreCriteria(criteria) {
-    return Array.isArray(criteria) &&
-        criteria.length >= 2 &&
-        criteria.length <= 10 &&
-        criteria.every(isNonEmptyText);
-}
-function validateChoiceCriteria(criteria) {
-    if (!isRecord(criteria))
-        return false;
-    const entries = Object.entries(criteria);
-    return entries.length > 0 &&
-        entries.length <= 255 &&
-        entries.every(([name, description]) => isSafeName(name) && (typeof description === "string" || description === null));
-}
-function isTypeSafeQuestion(value) {
-    if (!isRecord(value))
-        return false;
-    if (Object.keys(value).some((key) => key !== "type" && key !== "instructions" && key !== "criteria")) {
-        return false;
+    const type = raw.type;
+    if (type !== "noul" && type !== "score" && type !== "choice") {
+        throw new DecisionInputError(`Unknown type for question '${name}'; expected noul, score, or choice`, "UNKNOWN_QUESTION_TYPE");
     }
-    if (!isNonEmptyText(value.instructions))
-        return false;
-    if (value.type === "noul")
-        return validateNoulCriteria(value.criteria);
-    if (value.type === "score")
-        return validateScoreCriteria(value.criteria);
-    if (value.type === "choice")
-        return validateChoiceCriteria(value.criteria);
-    return false;
+    const instructions = raw.instructions;
+    if (typeof instructions !== "string" ||
+        instructions.trim().length === 0 ||
+        instructions.length > MAX_INSTRUCTIONS_CHARS) {
+        throw invalid(name, `instructions must be a non-empty string of at most ${MAX_INSTRUCTIONS_CHARS} chars`);
+    }
+    const trimmed = instructions.trim();
+    if (type === "noul") {
+        const criteria = parseNoulCriteria(name, raw.criteria);
+        return criteria
+            ? { type, instructions: trimmed, criteria }
+            : { type, instructions: trimmed };
+    }
+    if (type === "score") {
+        return { type, instructions: trimmed, criteria: parseScoreCriteria(name, raw.criteria) };
+    }
+    return { type, instructions: trimmed, criteria: parseChoiceCriteria(name, raw.criteria) };
 }
+/**
+ * Parses and validates one `{ state, questions }` request.
+ * Throws DecisionInputError with fixed messages that never echo submitted content.
+ */
 export function parseDecisionRequest(input, maxStateChars) {
-    if (typeof input !== "string")
-        throw new DecisionInputError(INVALID_JSON);
     if (Buffer.byteLength(input, "utf8") > MAX_DECISION_INPUT_BYTES) {
-        throw new DecisionInputError(INPUT_TOO_LARGE);
+        throw new DecisionInputError(`Input exceeds ${MAX_DECISION_INPUT_BYTES} bytes`, "INPUT_TOO_LARGE");
     }
     let parsed;
     try {
         parsed = JSON.parse(input);
     }
     catch {
-        throw new DecisionInputError(INVALID_JSON);
+        throw new DecisionInputError("Input is not valid JSON", "INVALID_JSON");
     }
-    if (!isRecord(parsed))
-        throw new DecisionInputError(INVALID_TOP_LEVEL);
-    const fields = Object.keys(parsed);
-    if (fields.length !== 2 ||
-        !Object.prototype.hasOwnProperty.call(parsed, "state") ||
-        !Object.prototype.hasOwnProperty.call(parsed, "questions")) {
-        throw new DecisionInputError(INVALID_TOP_LEVEL);
+    if (!isPlainObject(parsed)) {
+        throw new DecisionInputError("Input must be a JSON object with 'state' and 'questions'", "INVALID_REQUEST");
     }
-    const serializedState = JSON.stringify(parsed.state);
-    if (serializedState === undefined || serializedState.length > maxStateChars) {
-        throw new DecisionInputError(INVALID_STATE);
-    }
-    const rawQuestions = parsed.questions;
-    if (!isRecord(rawQuestions))
-        throw new DecisionInputError(INVALID_QUESTIONS);
-    const questionNames = Object.keys(rawQuestions);
-    if (questionNames.length === 0 || questionNames.length > MAX_DECISION_QUESTIONS) {
-        throw new DecisionInputError(INVALID_QUESTIONS);
-    }
-    for (const name of questionNames) {
-        if (!isSafeName(name) || !isTypeSafeQuestion(rawQuestions[name])) {
-            throw new DecisionInputError(INVALID_QUESTION);
+    for (const key of Object.keys(parsed)) {
+        if (key !== "state" && key !== "questions") {
+            throw new DecisionInputError("Input has an unknown top-level field", "UNKNOWN_FIELD");
         }
     }
-    return {
-        state: parsed.state,
-        questions: rawQuestions,
-    };
+    if (!Object.hasOwn(parsed, "state") || parsed.state === null || parsed.state === undefined) {
+        throw new DecisionInputError("Input requires a non-null 'state'", "MISSING_STATE");
+    }
+    if (!Object.hasOwn(parsed, "questions")) {
+        throw new DecisionInputError("Input requires 'questions'", "MISSING_QUESTIONS");
+    }
+    const state = parsed.state;
+    if (JSON.stringify(state).length > maxStateChars) {
+        throw new DecisionInputError(`State exceeds ${maxStateChars} characters`, "STATE_TOO_LARGE");
+    }
+    const rawQuestions = parsed.questions;
+    if (!isPlainObject(rawQuestions)) {
+        throw new DecisionInputError("'questions' must be an object", "INVALID_QUESTIONS");
+    }
+    const names = Object.keys(rawQuestions);
+    if (names.length < 1 || names.length > MAX_DECISION_QUESTIONS) {
+        throw new DecisionInputError(`'questions' must have 1 to ${MAX_DECISION_QUESTIONS} entries`, "INVALID_QUESTIONS");
+    }
+    for (const name of names) {
+        if (!QUESTION_NAME_PATTERN.test(name) || FORBIDDEN_NAMES.has(name)) {
+            throw new DecisionInputError("Question names must match /^[A-Za-z][A-Za-z0-9_]{0,63}$/ and not be reserved", "INVALID_QUESTION_NAME");
+        }
+    }
+    const questions = {};
+    for (const name of names) {
+        if (!Object.hasOwn(rawQuestions, name))
+            continue;
+        questions[name] = parseQuestion(name, rawQuestions[name]);
+    }
+    return { state, questions };
 }

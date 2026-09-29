@@ -62,6 +62,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -116,6 +117,7 @@ describe("PostToolUse Hook", () => {
             outputChars: 10,
             leakThreshold: 0.9,
             minConfidence: 0.6,
+            successCheck: "always",
           },
         } as any,
       },
@@ -127,7 +129,7 @@ describe("PostToolUse Hook", () => {
     assert.match(capturedState.output, /chars elided/);
   });
 
-  it("deterministic advice: high confidence failure advice returned in additionalContext", async () => {
+  it("successful output gets no failure advice even with a confident failure class", async () => {
     let jevCalled = false;
     const askJevFn = async () => {
       jevCalled = true;
@@ -168,6 +170,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -176,16 +179,12 @@ describe("PostToolUse Hook", () => {
       config,
     });
 
+    // A successful command never gets failure advice, even when its output
+    // mentions an error and TypeSafe returns a failure class.
     assert.strictEqual(jevCalled, true);
-    assert.ok(result);
-    assert.strictEqual(result.systemMessage, undefined);
-    assert.ok(result.hookSpecificOutput);
-    assert.strictEqual(result.hookSpecificOutput.hookEventName, "PostToolUse");
-    assert.strictEqual(result.hookSpecificOutput.updatedToolOutput, undefined);
-    assert.strictEqual(
-      result.hookSpecificOutput.additionalContext,
-      "claude-jev: this Bash result reads as a transient failure; Retrying the same command unchanged is reasonable."
-    );
+    assert.strictEqual(result?.systemMessage, undefined);
+    assert.strictEqual(result?.hookSpecificOutput?.additionalContext, undefined);
+    assert.strictEqual(result?.hookSpecificOutput?.updatedToolOutput, undefined);
   });
 
   it("low confidence silence: failure advice below minConfidence returns silence", async () => {
@@ -220,6 +219,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -270,6 +270,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -328,6 +329,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -374,6 +376,7 @@ describe("PostToolUse Hook", () => {
       tool_use_id: "toolu_dup_123",
       tool_input: { command: "curl https://api.example.com" },
       tool_response: { stdout: "", stderr: "ECONNRESET" },
+      is_error: true,
     };
 
     const config: any = {
@@ -385,6 +388,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -440,6 +444,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -478,6 +483,7 @@ describe("PostToolUse Hook", () => {
       cwd: tmpDir,
       scratchpad_dir: tmpDir,
       hook_event_name: "PostToolUse",
+      is_error: true,
       tool_name: "Bash",
       tool_input: { command: "npm start" },
       tool_response: {
@@ -497,6 +503,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -626,6 +633,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -677,6 +685,7 @@ describe("PostToolUse Hook", () => {
       tool_name: "Bash",
       tool_input: { command: "npm test" },
       tool_response: { stdout: "", stderr: "ECONNRESET" },
+      is_error: true,
     };
     const payload2 = {
       session_id: "sess-concurrent",
@@ -686,6 +695,7 @@ describe("PostToolUse Hook", () => {
       tool_name: "Bash",
       tool_input: { command: "npm test" },
       tool_response: { stdout: "", stderr: "ECONNRESET" },
+      is_error: true,
     };
 
     const config: any = {
@@ -697,6 +707,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -750,6 +761,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -804,6 +816,7 @@ describe("PostToolUse Hook", () => {
         outputChars: 2000,
         leakThreshold: 0.9,
         minConfidence: 0.6,
+        successCheck: "always",
       },
     };
 
@@ -818,5 +831,116 @@ describe("PostToolUse Hook", () => {
     assert.strictEqual(result.hookSpecificOutput.hookEventName, "PostToolUse");
     assert.ok(result.hookSpecificOutput.additionalContext?.includes("do not reproduce"));
     assert.strictEqual(result.hookSpecificOutput.updatedToolOutput, undefined);
+  });
+});
+
+describe("Successful output prefilter", () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    clearRegisteredApiKeys();
+    clearMemoryCache();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-jev-prefilter-test-"));
+  });
+
+  const baseConfig = (successCheck?: "prefilter" | "always"): any => ({
+    model: "jev-latest",
+    apiKey: "test-api-key",
+    output: {
+      enabled: true,
+      tools: ["Bash"],
+      outputChars: 2000,
+      leakThreshold: 0.9,
+      minConfidence: 0.6,
+      ...(successCheck ? { successCheck } : {}),
+    },
+  });
+
+  const payload = (id: string, stdout: string, command = "ls -la", extra: Record<string, unknown> = {}) => ({
+    session_id: `sess-${id}`,
+    cwd: tmpDir,
+    scratchpad_dir: tmpDir,
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_use_id: `toolu-${id}`,
+    tool_input: { command },
+    tool_response: { stdout, stderr: "", interrupted: false, isImage: false },
+    ...extra,
+  });
+
+  const recordingAsk = (calls: any[], noul = 0.01) => async (call: any) => {
+    calls.push(call);
+    return { model: "jev-1.13.0", answers: { leaks_secret: { type: "noul" as const, noul } } };
+  };
+
+  it("skips the TypeSafe call for benign successful output by default", async () => {
+    const calls: any[] = [];
+    const result = await runPostTool(
+      payload("benign", "total 8\ndrwxr-xr-x  3 user staff 96 src\ncommit 3c5fa97e1b2d4f6a8c0e2d4f6a8c0e2d4f6a8c0e"),
+      { askJevFn: recordingAsk(calls) as any, config: baseConfig() }
+    );
+    assert.equal(calls.length, 0);
+    assert.equal(result?.hookSpecificOutput?.additionalContext, undefined);
+  });
+
+  it("sends credential-like successful output with only the leak question", async () => {
+    const calls: any[] = [];
+    const result = await runPostTool(
+      payload("secret", "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"),
+      { askJevFn: recordingAsk(calls, 0.97) as any, config: baseConfig() }
+    );
+    assert.equal(calls.length, 1);
+    assert.deepEqual(Object.keys(calls[0].questions), ["leaks_secret"]);
+    assert.equal(result?.systemMessage, LEAK_SYSTEM_MESSAGE);
+    assert.equal(result?.hookSpecificOutput?.updatedToolOutput?.stdout, WITHHELD_OUTPUT_TEXT);
+  });
+
+  it("sends output of a secret-reading command even when it looks benign", async () => {
+    const calls: any[] = [];
+    await runPostTool(payload("env", "HOME=/Users/me\nSHELL=/bin/zsh", "env | sort"), {
+      askJevFn: recordingAsk(calls) as any,
+      config: baseConfig(),
+    });
+    assert.equal(calls.length, 1);
+  });
+
+  it("sends every successful output when successCheck is always", async () => {
+    const calls: any[] = [];
+    await runPostTool(payload("always", "hello"), {
+      askJevFn: recordingAsk(calls) as any,
+      config: baseConfig("always"),
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(Object.keys(calls[0].questions), ["leaks_secret"]);
+  });
+
+  it("always judges failed output with both questions", async () => {
+    const calls: any[] = [];
+    await runPostToolFailure(
+      {
+        session_id: "sess-fail-prefilter",
+        cwd: tmpDir,
+        scratchpad_dir: tmpDir,
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_use_id: "toolu-fail-prefilter",
+        tool_input: { command: "npm test" },
+        error: "Exit code 1\n1 failing",
+      },
+      {
+        askJevFn: (async (call: any) => {
+          calls.push(call);
+          return {
+            model: "jev-1.13.0",
+            answers: {
+              leaks_secret: { type: "noul" as const, noul: 0.01 },
+              failure_class: { type: "choice" as const, choice: "code_bug", probabilities: { code_bug: 1 }, confidence: 0.9 },
+            },
+          };
+        }) as any,
+        config: baseConfig(),
+      }
+    );
+    assert.equal(calls.length, 1);
+    assert.deepEqual(Object.keys(calls[0].questions).sort(), ["failure_class", "leaks_secret"]);
   });
 });

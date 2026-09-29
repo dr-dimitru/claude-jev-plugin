@@ -97,7 +97,7 @@ export function evaluateGate(responseOrAnswers, configInput) {
     // Validate required questions presence
     for (const qKey of ["destructive", "exfiltration", "beyond_scope", "impact"]) {
         if (!(qKey in answers)) {
-            throw new Error(`Malformed Jev response: missing answer for question '${qKey}'`);
+            throw new Error(`Malformed TypeSafe response: missing answer for question '${qKey}'`);
         }
     }
     const scores = {};

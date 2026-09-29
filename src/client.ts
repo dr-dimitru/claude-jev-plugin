@@ -2,12 +2,13 @@
  * TypeSafe System One client for claude-jev.
  *
  * Directly posts typed questions to TypeSafe System One API over HTTPS.
+ * Model-neutral: Jev is the default model; any TypeSafe model ID is accepted.
  * Pure TypeScript implementation using Node built-in fetch and AbortController.
  */
 
 export const DEFAULT_TYPESAFE_MODEL = "jev-latest";
 /** @deprecated Use DEFAULT_TYPESAFE_MODEL. */
-export { DEFAULT_TYPESAFE_MODEL as DEFAULT_MODEL };
+export const DEFAULT_MODEL = DEFAULT_TYPESAFE_MODEL;
 export const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const DEFAULT_TIMEOUT_MS = 15000;
 export const DEFAULT_RETRIES = 2;
@@ -146,29 +147,6 @@ export interface TypeSafeCall {
   fetch?: typeof fetch;
 }
 
-/** @deprecated Use TypeSafeNoulQuestion. */
-export type JevNoulQuestion = TypeSafeNoulQuestion;
-/** @deprecated Use TypeSafeScoreQuestion. */
-export type JevScoreQuestion = TypeSafeScoreQuestion;
-/** @deprecated Use TypeSafeChoiceQuestion. */
-export type JevChoiceQuestion = TypeSafeChoiceQuestion;
-/** @deprecated Use TypeSafeQuestion. */
-export type JevQuestion = TypeSafeQuestion;
-/** @deprecated Use TypeSafeNoulAnswer. */
-export type JevNoulAnswer = TypeSafeNoulAnswer;
-/** @deprecated Use TypeSafeScoreAnswer. */
-export type JevScoreAnswer = TypeSafeScoreAnswer;
-/** @deprecated Use TypeSafeChoiceAnswer. */
-export type JevChoiceAnswer = TypeSafeChoiceAnswer;
-/** @deprecated Use TypeSafeAnswer. */
-export type JevAnswer = TypeSafeAnswer;
-/** @deprecated Use TypeSafeUsage. */
-export type JevUsage = TypeSafeUsage;
-/** @deprecated Use TypeSafeResponse. */
-export type JevResponse = TypeSafeResponse;
-/** @deprecated Use TypeSafeCall. */
-export type JevCall = TypeSafeCall;
-
 // --- Error Handling ---
 
 export class TypeSafeError extends Error {
@@ -197,9 +175,6 @@ export class TypeSafeError extends Error {
   }
 }
 
-/** @deprecated Use TypeSafeError. */
-export { TypeSafeError as JevError };
-
 /**
  * Returns true if an HTTP status code represents a retryable transient failure (429, 529, 5xx).
  */
@@ -221,9 +196,12 @@ export function validateEndpoint(endpoint: string): string {
     });
   }
 
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+  const allowedProtocol =
+    parsed.protocol === "https:" ||
+    (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname));
+  if (!allowedProtocol || parsed.username || parsed.password) {
     throw new TypeSafeError(
-      "TypeSafe endpoint must use HTTPS without embedded credentials",
+      "TypeSafe endpoint must use HTTPS, or HTTP on a loopback host, without embedded credentials",
       { code: "INVALID_ENDPOINT", retryable: false }
     );
   }
@@ -231,9 +209,49 @@ export function validateEndpoint(endpoint: string): string {
   return parsed.href;
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "[::1]" ||
+    /^127(\.\d{1,3}){3}$/.test(host)
+  );
+}
+
+/**
+ * Returns true when an endpoint points at a System One server on this
+ * machine, such as a local Kev or Laya server. Local endpoints may use plain
+ * HTTP and do not require an API key. The TypeSafe key from
+ * TYPESAFE_API_KEY is never sent to them.
+ */
+export function isLocalEndpoint(endpoint: string | undefined): boolean {
+  if (endpoint === undefined) return false;
+  try {
+    return isLoopbackHost(new URL(endpoint).hostname);
+  } catch {
+    return false;
+  }
+}
+
 // --- Response Validation ---
 
 export const PROBABILITY_SUM_TOLERANCE = 0.05;
+/** Maximum rounding error of one probability reported to two decimals. */
+export const PROBABILITY_ROUNDING_STEP = 0.005;
+
+/**
+ * Allowed deviation of a probability sum from 1 for a distribution over
+ * `count` categories. Two-decimal rounding can drift by up to 0.005 per
+ * category, so wide criteria need more than the fixed base tolerance.
+ */
+export function probabilityTolerance(count: number): number {
+  return Math.max(PROBABILITY_SUM_TOLERANCE, count * PROBABILITY_ROUNDING_STEP + 1e-9);
+}
+
+/** Bounds a server-supplied string before it appears in an error message. */
+function quoteServerValue(value: string): string {
+  return JSON.stringify(boundText(value, 40));
+}
 
 function validateProbabilities(
   probs: unknown,
@@ -274,7 +292,7 @@ function validateProbabilities(
   // TypeSafe rounds each probability to two decimals, so a six-way
   // distribution legitimately sums to 0.97..1.03. Accept that drift and
   // renormalize; anything wider is a malformed distribution.
-  if (Math.abs(total - 1) > PROBABILITY_SUM_TOLERANCE) {
+  if (Math.abs(total - 1) > probabilityTolerance(keys.length)) {
     throw new TypeSafeError(
       `Malformed answer for question '${qName}': probabilities must sum to 1`,
       { code: "MALFORMED_RESPONSE", retryable: false }
@@ -301,7 +319,11 @@ function validateAnswer(
   }
 
   const ans = rawAnswer as Record<string, unknown>;
-  const ansType = ans.type;
+  // Some local servers, such as Laya, omit `type`. When the question is
+  // known, its declared type decides how the answer is validated.
+  const ansType = ans.type === undefined && expectedQuestion !== undefined
+    ? expectedQuestion.type
+    : ans.type;
 
   if (typeof ansType !== "string") {
     throw new TypeSafeError(
@@ -312,7 +334,7 @@ function validateAnswer(
 
   if (expectedQuestion !== undefined && ansType !== expectedQuestion.type) {
     throw new TypeSafeError(
-      `Malformed answer for question '${qName}': answer type '${ansType}' does not match question type '${expectedQuestion.type}'`,
+      `Malformed answer for question '${qName}': answer type ${quoteServerValue(ansType)} does not match question type '${expectedQuestion.type}'`,
       { code: "MALFORMED_RESPONSE", retryable: false }
     );
   }
@@ -432,17 +454,37 @@ function validateAnswer(
   }
 
   throw new TypeSafeError(
-    `Malformed answer for question '${qName}': unknown answer type '${ansType}'`,
+    `Malformed answer for question '${qName}': unknown answer type ${quoteServerValue(ansType)}`,
     { code: "MALFORMED_RESPONSE", retryable: false }
   );
 }
 
 /**
+ * Returns the family of a System One model ID: the lowercase text before the
+ * first "-", ignoring any "org/" prefix. TypeSafe answers an alias such as
+ * "jev-latest" with the versioned ID that ran, such as "jev-1.13.0"; both
+ * belong to family "jev". A local Kev server loaded as "jaredpalmer/kev-4b"
+ * may answer "kev-latest"; both belong to family "kev".
+ */
+export function modelFamily(modelId: string): string {
+  const lowered = modelId.trim().toLowerCase();
+  const trimmed = lowered.slice(lowered.lastIndexOf("/") + 1);
+  const dash = trimmed.indexOf("-");
+  return dash === -1 ? trimmed : trimmed.slice(0, dash);
+}
+
+/**
  * Strictly validates the wire response shape from TypeSafe System One.
+ *
+ * Returns only `model`, validated `answers`, and `usage` token counts.
+ * Unrequested top-level fields, extra answers, and extra usage fields are
+ * dropped. When `expectedModel` is given, the response model must belong to
+ * the same family, so a server-side substitution such as jev to kev fails.
  */
 export function validateTypeSafeResponse(
   raw: unknown,
-  expectedQuestions?: Record<string, TypeSafeQuestion>
+  expectedQuestions?: Record<string, TypeSafeQuestion>,
+  expectedModel?: string
 ): TypeSafeResponse {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new TypeSafeError("Malformed response: expected JSON object", {
@@ -465,7 +507,7 @@ export function validateTypeSafeResponse(
 
   if (expectedQuestions) {
     for (const [qName, qDef] of Object.entries(expectedQuestions)) {
-      if (!(qName in answersObj)) {
+      if (!Object.hasOwn(answersObj, qName)) {
         throw new TypeSafeError(
           `Malformed response: missing answer for question '${qName}'`,
           { code: "MALFORMED_RESPONSE", retryable: false }
@@ -485,51 +527,41 @@ export function validateTypeSafeResponse(
       retryable: false,
     });
   }
-
-  let validatedUsage: TypeSafeUsage | undefined;
-  if (rawObj.usage !== undefined) {
-    if (!rawObj.usage || typeof rawObj.usage !== "object" || Array.isArray(rawObj.usage)) {
-      throw new TypeSafeError("Malformed response: usage must be an object", {
-        code: "MALFORMED_RESPONSE",
-        retryable: false,
-      });
-    }
-    const u = rawObj.usage as Record<string, unknown>;
-    if (
-      typeof u.input_tokens !== "number" ||
-      !Number.isFinite(u.input_tokens) ||
-      typeof u.output_tokens !== "number" ||
-      !Number.isFinite(u.output_tokens)
-    ) {
-      throw new TypeSafeError(
-        "Malformed response: usage input_tokens and output_tokens must be finite numbers",
-        { code: "MALFORMED_RESPONSE", retryable: false }
-      );
-    }
-    validatedUsage = {
-      input_tokens: u.input_tokens,
-      output_tokens: u.output_tokens,
-      ...u,
-    };
-  } else {
-    throw new TypeSafeError("Malformed response: missing usage object", {
-      code: "MALFORMED_RESPONSE",
-      retryable: false,
-    });
+  const model = rawObj.model.trim();
+  if (expectedModel !== undefined && modelFamily(model) !== modelFamily(expectedModel)) {
+    throw new TypeSafeError(
+      `Model mismatch: requested ${quoteServerValue(expectedModel)} but TypeSafe answered with ${quoteServerValue(model)}`,
+      { code: "MODEL_MISMATCH", retryable: false }
+    );
   }
 
-  const result: TypeSafeResponse = {
-    ...rawObj,
+  if (!rawObj.usage || typeof rawObj.usage !== "object" || Array.isArray(rawObj.usage)) {
+    throw new TypeSafeError(
+      rawObj.usage === undefined
+        ? "Malformed response: missing usage object"
+        : "Malformed response: usage must be an object",
+      { code: "MALFORMED_RESPONSE", retryable: false }
+    );
+  }
+  const u = rawObj.usage as Record<string, unknown>;
+  if (
+    typeof u.input_tokens !== "number" ||
+    !Number.isFinite(u.input_tokens) ||
+    typeof u.output_tokens !== "number" ||
+    !Number.isFinite(u.output_tokens)
+  ) {
+    throw new TypeSafeError(
+      "Malformed response: usage input_tokens and output_tokens must be finite numbers",
+      { code: "MALFORMED_RESPONSE", retryable: false }
+    );
+  }
+
+  return {
+    model,
     answers: validatedAnswers,
+    usage: { input_tokens: u.input_tokens, output_tokens: u.output_tokens },
   };
-  if (validatedUsage) {
-    result.usage = validatedUsage;
-  }
-  return result;
 }
-
-/** @deprecated Use validateTypeSafeResponse. */
-export { validateTypeSafeResponse as validateJevResponse };
 
 export function parseRetryAfter(
   value: string | null | undefined,
@@ -574,16 +606,20 @@ export async function askTypeSafe(call: TypeSafeCall): Promise<TypeSafeResponse>
   const envKey = process.env.TYPESAFE_API_KEY?.trim();
   if (envKey) registerApiKey(envKey);
 
-  const apiKey = call.apiKey?.trim() || envKey;
-  if (!apiKey) {
+  const endpoint = validateEndpoint(call.endpoint ?? DEFAULT_ENDPOINT);
+  const local = isLocalEndpoint(endpoint);
+  // Never fall back to the TypeSafe key for a local server; it may be any
+  // process listening on that port. Local servers need a key only when their
+  // operator set one, and it must be passed explicitly.
+  const apiKey = call.apiKey?.trim() || (local ? undefined : envKey);
+  if (!apiKey && !local) {
     throw new TypeSafeError(
-      "Missing TypeSafe API key. Set TYPESAFE_API_KEY or provide apiKey in TypeSafeCall.",
+      "Missing TypeSafe API key. Set TYPESAFE_API_KEY or provide apiKey in the call.",
       { code: "MISSING_KEY", retryable: false }
     );
   }
 
-  const model = call.model ?? DEFAULT_TYPESAFE_MODEL;
-  const endpoint = validateEndpoint(call.endpoint ?? DEFAULT_ENDPOINT);
+  const model = call.model ?? DEFAULT_MODEL;
   const timeoutMs = call.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const retries = call.retries ?? DEFAULT_RETRIES;
   const fetchFn = call.fetch ?? fetch;
@@ -646,10 +682,9 @@ export async function askTypeSafe(call: TypeSafeCall): Promise<TypeSafeResponse>
       try {
         const res = await fetchFn(endpoint, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-          },
+          headers: apiKey
+            ? { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` }
+            : { "Content-Type": "application/json" },
           body: requestBody,
           signal: controller.signal,
         });
@@ -665,7 +700,10 @@ export async function askTypeSafe(call: TypeSafeCall): Promise<TypeSafeResponse>
               { code: "MALFORMED_JSON", retryable: false, cause: parseErr }
             );
           }
-          return validateTypeSafeResponse(json, call.questions);
+          // A local server is run by the user and may report its own checkpoint
+          // name (Laya answers "english" requests as "laya-rl-agent"), so the
+          // model-family check only guards remote endpoints.
+          return validateTypeSafeResponse(json, call.questions, local ? undefined : model);
         }
 
         const status = res.status;
@@ -728,5 +766,36 @@ export async function askTypeSafe(call: TypeSafeCall): Promise<TypeSafeResponse>
   }
 }
 
+// --- Deprecated Jev-named aliases ---
+// Kept so existing package consumers keep working. Prefer the TypeSafe names.
+
+/** @deprecated Use TypeSafeNoulQuestion. */
+export type JevNoulQuestion = TypeSafeNoulQuestion;
+/** @deprecated Use TypeSafeScoreQuestion. */
+export type JevScoreQuestion = TypeSafeScoreQuestion;
+/** @deprecated Use TypeSafeChoiceQuestion. */
+export type JevChoiceQuestion = TypeSafeChoiceQuestion;
+/** @deprecated Use TypeSafeQuestion. */
+export type JevQuestion = TypeSafeQuestion;
+/** @deprecated Use TypeSafeNoulAnswer. */
+export type JevNoulAnswer = TypeSafeNoulAnswer;
+/** @deprecated Use TypeSafeChoiceAnswer. */
+export type JevChoiceAnswer = TypeSafeChoiceAnswer;
+/** @deprecated Use TypeSafeScoreAnswer. */
+export type JevScoreAnswer = TypeSafeScoreAnswer;
+/** @deprecated Use TypeSafeAnswer. */
+export type JevAnswer = TypeSafeAnswer;
+/** @deprecated Use TypeSafeUsage. */
+export type JevUsage = TypeSafeUsage;
+/** @deprecated Use TypeSafeResponse. */
+export type JevResponse = TypeSafeResponse;
+/** @deprecated Use TypeSafeCall. */
+export type JevCall = TypeSafeCall;
+/** @deprecated Use TypeSafeError. Same constructor, so instanceof works with either name. */
+export const JevError = TypeSafeError;
+/** @deprecated Use TypeSafeError. */
+export type JevError = TypeSafeError;
+/** @deprecated Use validateTypeSafeResponse. */
+export const validateJevResponse = validateTypeSafeResponse;
 /** @deprecated Use askTypeSafe. */
-export { askTypeSafe as askJev };
+export const askJev = askTypeSafe;

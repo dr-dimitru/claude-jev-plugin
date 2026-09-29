@@ -61,6 +61,18 @@ export interface SessionStore {
     setCacheMetadata(key: string, value: unknown): Promise<void>;
 }
 /**
+ * Returns the directory that holds session state files for the given inputs.
+ */
+export declare function resolveSessionBaseDir(options: {
+    scratchpadDir?: string;
+    homeDir?: string;
+    env?: Record<string, string | undefined>;
+}): string;
+/**
+ * Returns the sha256 hex name used for a session (and optional agent) identity.
+ */
+export declare function hashSessionIdentity(sessionId: string, agentId?: string): string;
+/**
  * Creates a session store instance for a given session_id and optional agent_id.
  * Safe against path traversal and concurrent corruption through atomic writes.
  */

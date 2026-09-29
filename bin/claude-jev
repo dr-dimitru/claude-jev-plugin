@@ -1,25 +1,24 @@
 #!/usr/bin/env node
 
 import * as path from "node:path";
-import { askTypeSafe, TypeSafeError, redact, boundText } from "../dist/client.js";
+import { askTypeSafe, TypeSafeError, redact, boundText, isLocalEndpoint } from "../dist/client.js";
 import {
   DecisionInputError,
   MAX_DECISION_INPUT_BYTES,
   parseDecisionRequest,
 } from "../dist/decision.js";
-import { loadConfig } from "../dist/config.js";
+import { canCallTypeSafe, loadConfig } from "../dist/config.js";
 import { buildGateState } from "../dist/state.js";
 import { sessionStore } from "../dist/hook-io.js";
 import { GATE_QUESTIONS, evaluateGate } from "../dist/gate.js";
+
+const STRICT_COMMANDS = new Set(["check", "ask"]);
 
 function parseArgs(rawArgs) {
   const positionals = [];
   let sessionId;
   let scratchpadDir;
   let cwd;
-  let endpoint;
-  let endpointProvided = false;
-  let modelProvided = false;
   let help = false;
 
   for (let i = 0; i < rawArgs.length; i++) {
@@ -39,30 +38,9 @@ function parseArgs(rawArgs) {
       cwd = rawArgs[++i];
     } else if (arg.startsWith("--cwd=")) {
       cwd = arg.slice("--cwd=".length);
-    } else if (
-      arg === "--endpoint" &&
-      i + 1 >= rawArgs.length &&
-      positionals[0]?.toLowerCase() === "check"
-    ) {
-      positionals.push(arg);
-    } else if (arg === "--endpoint") {
-      endpointProvided = true;
-      if (i + 1 < rawArgs.length) endpoint = rawArgs[++i];
-    } else if (arg.startsWith("--endpoint=")) {
-      endpointProvided = true;
-      endpoint = arg.slice("--endpoint=".length);
-    } else if (arg === "--model") {
-      modelProvided = true;
-      if (positionals[0]?.toLowerCase() === "check") {
-        positionals.push(arg);
-      } else if (positionals[0]?.toLowerCase() === "ask" && i + 1 < rawArgs.length) {
-        i++;
-      }
-    } else if (arg.startsWith("--model=")) {
-      modelProvided = true;
-      if (positionals[0]?.toLowerCase() === "check") positionals.push(arg);
-    } else if (arg.startsWith("-") && positionals[0]?.toLowerCase() !== "check") {
-      // Ignore unknown flags for non-check commands.
+    } else if (arg.startsWith("-") && !STRICT_COMMANDS.has(positionals[0]?.toLowerCase())) {
+      // Ignore unknown flags for non-strict commands. `check` treats them as
+      // text; `ask` rejects them so no flag can override trusted config.
     } else {
       positionals.push(arg);
     }
@@ -75,9 +53,6 @@ function parseArgs(rawArgs) {
     sessionId,
     scratchpadDir,
     cwd,
-    endpoint,
-    endpointProvided,
-    modelProvided,
     help,
   };
 }
@@ -99,53 +74,187 @@ Options:
   --session-id <id>        Exact session ID for session state and toggles
   --scratchpad-dir <dir>   Custom scratchpad/cache directory for session state
   --cwd <dir>              Working directory (defaults to current working directory)
-  --endpoint <url>         Custom TypeSafe API endpoint
   -h, --help               Show this help message
+
+ask reads one JSON object {"state": ..., "questions": {...}} from stdin
+(max ${MAX_DECISION_INPUT_BYTES / 1024} KiB), sends it to the configured TypeSafe model in one
+request, and prints {"model", "usage", "answers"} as JSON. It accepts no
+model or endpoint override. Exit 2: invalid input. Exit 1: TypeSafe or
+configuration error.
 `);
 }
 
-async function readDecisionInput() {
-  const chunks = [];
-  let totalBytes = 0;
-
-  for await (const chunk of process.stdin) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += buffer.length;
-    if (totalBytes > MAX_DECISION_INPUT_BYTES) {
-      throw new DecisionInputError("Invalid decision request: input exceeds 64 KiB.");
-    }
-    chunks.push(buffer);
-  }
-
-  return Buffer.concat(chunks, totalBytes).toString("utf8");
+function formatGateScores(scores) {
+  const d = scores?.destructive?.toFixed(2) ?? "n/a";
+  const e = scores?.exfiltration?.toFixed(2) ?? "n/a";
+  const b = (scores?.beyond_scope ?? scores?.beyondScope)?.toFixed(2) ?? "n/a";
+  const i = scores?.impact?.toFixed(2) ?? "n/a";
+  const c = scores?.impactConfidence?.toFixed(2) ?? "n/a";
+  return `Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`;
 }
 
-function reportAskError(error) {
-  if (error instanceof DecisionInputError) {
-    console.error(`Error: ${error.message}`);
-    return;
+const STDIN_IDLE_TIMEOUT_MS = 5000;
+
+class StdinTooLargeError extends Error {}
+
+class StdinTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`stdin idle timeout after ${timeoutMs} ms`);
+    this.name = "StdinTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function getStdinIdleTimeoutMs() {
+  const raw = process.env.CLAUDE_JEV_STDIN_TIMEOUT_MS;
+  if (raw !== undefined) {
+    const trimmed = raw.trim();
+    if (/^[1-9]\d*$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isSafeInteger(parsed) && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return STDIN_IDLE_TIMEOUT_MS;
+}
+
+/**
+ * Reads stdin as UTF-8, stopping once more than maxBytes arrive so oversized
+ * input is never fully buffered, or if no chunk arrives within timeoutMs.
+ */
+function readBoundedStdin(maxBytes, timeoutMs = getStdinIdleTimeoutMs()) {
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const chunks = [];
+    let total = 0;
+    let timer = null;
+
+    const cleanup = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      stdin.removeListener("data", onData);
+      stdin.removeListener("end", onEnd);
+      stdin.removeListener("error", onError);
+    };
+
+    const resetTimer = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+      timer = setTimeout(() => {
+        cleanup();
+        stdin.destroy();
+        reject(new StdinTimeoutError(timeoutMs));
+      }, timeoutMs);
+    };
+
+    const onData = (chunk) => {
+      const len = typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+      total += len;
+      if (total > maxBytes) {
+        cleanup();
+        stdin.destroy();
+        reject(new StdinTooLargeError());
+        return;
+      }
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      resetTimer();
+    };
+
+    const onEnd = () => {
+      cleanup();
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+
+    const onError = (err) => {
+      cleanup();
+      reject(err);
+    };
+
+    stdin.on("data", onData);
+    stdin.on("end", onEnd);
+    stdin.on("error", onError);
+
+    resetTimer();
+    stdin.resume();
+  });
+}
+
+/**
+ * Describes a failed TypeSafe call by fixed category only: no response body,
+ * submitted state, or question text.
+ */
+function describeTypeSafeFailure(err, model) {
+  const code = err instanceof TypeSafeError ? err.code ?? "UNKNOWN" : "UNEXPECTED";
+  const status = err instanceof TypeSafeError && err.status !== undefined ? `, HTTP ${err.status}` : "";
+  return `no TypeSafe judgment available (${code}${status}) for model ${model}`;
+}
+
+function failAsk(message, exitCode) {
+  console.error(`Error: ${message}`);
+  process.exit(exitCode);
+}
+
+async function runAsk(args, cwd) {
+  if (args.positionals.length > 1) {
+    failAsk("ask takes no arguments or options; send the request JSON on stdin. Model and endpoint come only from ~/.claude/claude-jev.json.", 2);
+  }
+  if (process.stdin.isTTY) {
+    failAsk("ask reads a JSON request from stdin. Usage: claude-jev ask < request.json", 2);
   }
 
-  if (error instanceof TypeSafeError && error.code === "MISSING_KEY") {
-    console.error("Error: Missing TypeSafe API key.");
-    return;
+  const ms = getStdinIdleTimeoutMs();
+  let input;
+  try {
+    input = await readBoundedStdin(MAX_DECISION_INPUT_BYTES, ms);
+  } catch (err) {
+    if (err instanceof StdinTooLargeError) {
+      failAsk(`invalid decision request (INPUT_TOO_LARGE): input exceeds ${MAX_DECISION_INPUT_BYTES} bytes`, 2);
+    }
+    if (err instanceof StdinTimeoutError) {
+      failAsk(`ask reads a JSON request from stdin; no input arrived within ${ms} ms. Usage: claude-jev ask < request.json`, 2);
+    }
+    failAsk("could not read stdin", 2);
   }
 
-  if (
-    error instanceof TypeSafeError &&
-    (error.code === "MALFORMED_JSON" || error.code === "MALFORMED_RESPONSE")
-  ) {
-    console.error("Error: TypeSafe response is invalid.");
-    return;
+  const config = loadConfig(cwd);
+  let request;
+  try {
+    request = parseDecisionRequest(input, config.maxStateChars);
+  } catch (err) {
+    if (err instanceof DecisionInputError) {
+      failAsk(`invalid decision request (${err.code}): ${err.message}`, 2);
+    }
+    throw err;
   }
 
-  if (error instanceof TypeSafeError) {
-    const status = typeof error.status === "number" ? ` (HTTP ${error.status})` : "";
-    console.error(`Error: TypeSafe request failed${status}.`);
-    return;
+  if (!canCallTypeSafe(config)) {
+    failAsk("Missing TypeSafe API key. Set TYPESAFE_API_KEY environment variable.", 1);
   }
 
-  console.error("Error: Decision request failed.");
+  let response;
+  try {
+    response = await askTypeSafe({
+      model: config.model,
+      state: request.state,
+      questions: request.questions,
+      apiKey: config.apiKey,
+      endpoint: config.endpoint,
+      timeoutMs: config.timeoutMs,
+      retries: config.retries,
+    });
+  } catch (err) {
+    // No answers are fabricated.
+    failAsk(describeTypeSafeFailure(err, config.model), 1);
+  }
+
+  const output = { model: response.model };
+  if (response.usage) output.usage = response.usage;
+  output.answers = response.answers;
+  console.log(JSON.stringify(output, null, 2));
 }
 
 async function main() {
@@ -191,7 +300,8 @@ Config:
   Gate: ${config.gate.enabled ? "enabled" : "disabled"} (mode: ${config.gate.mode})
   Gate tools: ${config.gate.tools.join(", ")}
   Output: ${config.output.enabled ? "enabled" : "disabled"} (tools: ${config.output.tools.join(", ")})
-  API key: ${config.apiKey ? "configured" : "not configured"}
+  API key: ${config.apiKey ? "configured" : isLocalEndpoint(config.endpoint) ? "not configured (not required for local endpoint)" : "not configured"}
+  Endpoint: ${isLocalEndpoint(config.endpoint) ? "local" : "remote"}
 Session:
   ${sessionInfo}`);
       break;
@@ -264,12 +374,7 @@ Session:
         console.log(`  Reasons: ${verdict.reasons.join(", ")}`);
       }
       if (verdict.scores && typeof verdict.scores === "object") {
-        const d = verdict.scores.destructive?.toFixed(2) ?? "n/a";
-        const e = verdict.scores.exfiltration?.toFixed(2) ?? "n/a";
-        const b = (verdict.scores.beyond_scope ?? verdict.scores.beyondScope)?.toFixed(2) ?? "n/a";
-        const i = verdict.scores.impact?.toFixed(2) ?? "n/a";
-        const c = verdict.scores.impactConfidence?.toFixed(2) ?? "n/a";
-        console.log(`  Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`);
+        console.log(`  ${formatGateScores(verdict.scores)}`);
       }
       break;
     }
@@ -298,46 +403,6 @@ Session:
       break;
     }
 
-    case "ask": {
-      if (args.positionals.length !== 1 || args.modelProvided || args.endpointProvided) {
-        console.error("Error: ask command does not accept positional arguments, --model, or --endpoint.");
-        process.exitCode = 1;
-        break;
-      }
-
-      try {
-        const input = await readDecisionInput();
-        const config = loadConfig(cwd);
-        const decision = parseDecisionRequest(input, config.maxStateChars);
-        const response = await askTypeSafe({
-          model: config.model,
-          state: decision.state,
-          questions: decision.questions,
-          apiKey: config.apiKey,
-          endpoint: config.endpoint,
-          timeoutMs: config.timeoutMs,
-          retries: config.retries,
-        });
-        const output = {
-          model: response.model,
-          ...(response.usage === undefined
-            ? {}
-            : {
-                usage: {
-                  input_tokens: response.usage.input_tokens,
-                  output_tokens: response.usage.output_tokens,
-                },
-              }),
-          answers: response.answers,
-        };
-        process.stdout.write(`${JSON.stringify(output)}\n`);
-      } catch (error) {
-        reportAskError(error);
-        process.exitCode = 1;
-      }
-      break;
-    }
-
     case "check": {
       const text = args.positionals.slice(1).join(" ").trim();
       if (!text) {
@@ -346,7 +411,7 @@ Session:
       }
 
       const config = loadConfig(cwd);
-      if (!config.apiKey) {
+      if (!canCallTypeSafe(config)) {
         console.error("Error: Missing TypeSafe API key. Set TYPESAFE_API_KEY environment variable.");
         process.exit(1);
       }
@@ -368,7 +433,7 @@ Session:
           state,
           questions: GATE_QUESTIONS,
           apiKey: config.apiKey,
-          endpoint: args.endpoint ?? config.endpoint,
+          endpoint: config.endpoint,
           timeoutMs: config.timeoutMs,
           retries: config.retries,
         });
@@ -379,18 +444,16 @@ Session:
         if (verdict.reasons.length > 0) {
           console.log(`  Reasons: ${verdict.reasons.join(", ")}`);
         }
-        const d = verdict.scores.destructive?.toFixed(2) ?? "n/a";
-        const e = verdict.scores.exfiltration?.toFixed(2) ?? "n/a";
-        const b = (verdict.scores.beyond_scope ?? verdict.scores.beyondScope)?.toFixed(2) ?? "n/a";
-        const i = verdict.scores.impact?.toFixed(2) ?? "n/a";
-        const c = verdict.scores.impactConfidence?.toFixed(2) ?? "n/a";
-        console.log(`  Scores: destructive=${d}, exfiltration=${e}, beyond_scope=${b}, impact=${i} (conf: ${c})`);
+        console.log(`  ${formatGateScores(verdict.scores)}`);
       } catch (err) {
-        const rawMsg = err?.message || String(err);
-        const safeMsg = redact(rawMsg);
-        console.error(`Error: ${safeMsg}`);
+        console.error(`Error: ${describeTypeSafeFailure(err, config.model)}`);
         process.exit(1);
       }
+      break;
+    }
+
+    case "ask": {
+      await runAsk(args, cwd);
       break;
     }
 

@@ -140,43 +140,27 @@ Content-Type: application/json
 
 Response must contain model, usage, and one typed answer per question. Plugin rejects missing answers, unknown options, incomplete distributions, invalid score legends, non-finite numbers, and probabilities that do not sum to one.
 
-## Model selection
+## Decision helper request
 
-The trusted global `model` setting defaults to `jev-latest`. Project config cannot change the model or endpoint. The client sends a non-empty configured model ID unchanged and does not fall back when the selected model is unavailable or returns an invalid response.
+`claude-jev ask` uses the same endpoint for user-requested decisions. It reads `{ "state": ..., "questions": {...} }` from stdin and sends one request with all questions. It does not split questions into several requests.
 
-TypeSafe's current [model docs](https://docs.typesafe.ai/models) list Jev and its aliases. `GET /v1/models` returns the names available to your account. Before selecting another ID, confirm it there and check that its responses match TypeSafe's documented [System One response contract](https://docs.typesafe.ai/api). This guide lists only the verified Jev default.
+The client sends the configured `model` (default `jev-latest`, an alias for `jev-1.13.0`). Only trusted global configuration sets the model or endpoint. There is no CLI override and no automatic fallback.
 
-## Custom decision requests
+The same wire contract works against a local server. Kev (https://github.com/jaredpalmer/kev) and Laya (https://github.com/NandhaKishorM/laya) are open-weight models that serve `POST /v1/systemone` and are not served by TypeSafe. Example global configuration:
 
-Use `claude-jev ask` for Claude-authored questions about one decision. It reads one JSON object from stdin with `state` and `questions` fields. It sends all questions that use the same state in one request.
-
-```bash
-claude-jev ask <<'JSON'
-{
-  "state": {
-    "decision": "Which option best fits the constraints?",
-    "options": ["Option A", "Option B"],
-    "constraints": ["Preserve existing user data."]
-  },
-  "questions": {
-    "best_option": {
-      "type": "choice",
-      "instructions": "Which option best fits the stated constraints?",
-      "criteria": {
-        "option_a": "Choose Option A.",
-        "option_b": "Choose Option B."
-      }
-    }
-  }
-}
-JSON
+```json
+{ "model": "kev-latest", "endpoint": "http://127.0.0.1:8009/v1/systemone" }
 ```
 
-Each question can be Noul, Score, or Choice. The command returns JSON with the resolved `model`, `usage`, and validated `answers`. `claude-jev ask` enforces local limits of 64 KiB for the complete UTF-8 input and 32 questions. State is limited by `maxStateChars`, which defaults to 8,000 characters and can be set in global or project configuration. TypeSafe's API requires 2 to 10 Score levels and allows 1 to 255 Choice options.
+```json
+{ "model": "english", "endpoint": "http://127.0.0.1:8000/v1/systemone" }
+```
 
-The current TypeSafe response contract requires a `usage` object. The CLI currently rejects responses without it.
+A local endpoint has hostname `localhost`, `127.x.x.x`, or `[::1]`. Only local endpoints may use plain `http:`. They need no API key, the client sends no Authorization header without one, and `TYPESAFE_API_KEY` is never sent to them. Laya's response `model` is `laya-rl-agent`, not the requested checkpoint name. The requested checkpoint appears in a top-level `routing` object (`routing.model`, `routing.reason`), which the plugin drops. Laya answers include `type`, adding `answer_confidence` and an `action` object that the plugin drops. Noul answers also carry `confidence`, which the plugin drops. The plugin still accepts answers without `type` when the question is declared. Noul, score, and choice answers all pass plugin validation. Kev adds `latency_ms`, which the plugin drops. See the README [Model selection](../README.md#model-selection) section.
 
-The command uses trusted model, endpoint, key, deadline, and retry settings. It does not accept per-request `--model` or `--endpoint` values. State and questions leave the machine and may incur API cost. Do not send conversation history. Ask before including sensitive details. The output is advisory evidence, not a fact, consent, or tool permission. An unavailable model or invalid response produces an error without automatic fallback or fabricated answers.
+The model-family check applies only to remote endpoints. A local server is run by the user and may report its own checkpoint name (Laya answers `english` requests as `laya-rl-agent`), so local responses are not rejected for a model mismatch. Remote endpoints fail with `MODEL_MISMATCH` on a cross-family answer. Family is the text before the first `-`. `jev-latest` answered by `jev-1.13.0` passes. An answer from another family, such as `kev` for a `jev-latest` request, fails with `MODEL_MISMATCH`. An `org/` prefix is ignored, so `jaredpalmer/kev-4b` and `kev-latest` are both family `kev`.
+
+Output is limited to `model`, validated answers, and `usage` token counts. The plugin drops other response fields. Probability maps must sum to one within `max(0.05, categories x 0.005)`, and the client renormalizes them. Limits are in the README [Decision helper](../README.md#decision-helper) section.
 
 ## Question primitives
 

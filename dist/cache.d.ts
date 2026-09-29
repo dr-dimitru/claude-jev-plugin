@@ -15,6 +15,7 @@ export interface CacheOptions {
     agentId?: string;
     scratchpadDir?: string;
     homeDir?: string;
+    env?: NodeJS.ProcessEnv;
     lockTimeoutMs?: number;
     staleLockMs?: number;
     pollIntervalMs?: number;
@@ -30,6 +31,14 @@ export declare function clearMemoryCache(): void;
  * Produces a stable SHA-256 key from any input value with recursively sorted keys.
  */
 export declare function normalizeKey(input: unknown): string;
+/**
+ * Returns the directory whose "cache" subdirectory holds per-session caches.
+ */
+export declare function resolveCacheBase(options?: {
+    scratchpadDir?: string;
+    homeDir?: string;
+    env?: NodeJS.ProcessEnv;
+}): string;
 /**
  * Gets a cached value or coordinates concurrent execution of the producer.
  * Features:

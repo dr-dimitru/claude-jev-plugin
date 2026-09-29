@@ -10,8 +10,19 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["ES2022", "DOM"],
-    "rewriteRelativeImportExtensions": true
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "rewriteRelativeImportExtensions": true,
+    "typeRoots": [
+      "./node_modules/@types"
+    ],
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*"]
+  "include": [
+    "src/**/*"
+  ]
 }

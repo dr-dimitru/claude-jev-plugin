@@ -61,9 +61,6 @@ function runCliAsync(
     const stderr: Buffer[] = [];
     child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
     child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-    child.stdin.on("error", (error: { code?: string }) => {
-      if (error.code !== "EPIPE") reject(error);
-    });
     child.on("error", reject);
     child.on("close", (status) =>
       resolve({
@@ -108,6 +105,24 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         pkg.scripts.check.indexOf("build") < pkg.scripts.check.indexOf("test"),
         "check must build committed runtime before CLI tests execute"
       );
+    });
+
+    it("commits no lockfile, pins dev tools exactly, and has no runtime dependencies", () => {
+      // A committed lockfile makes Claude Code run npm ci in installed copies,
+      // which installs devDependencies. A local, gitignored one is fine.
+      const tracked = spawnSync("git", ["ls-files", "--", "package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb"], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      });
+      assert.equal(tracked.status, 0);
+      assert.equal(tracked.stdout.trim(), "");
+      const ignored = spawnSync("git", ["check-ignore", "-q", "package-lock.json"], { cwd: REPO_ROOT });
+      assert.equal(ignored.status, 0, "package-lock.json must be gitignored");
+      const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+      for (const [name, version] of Object.entries(pkg.devDependencies ?? {})) {
+        assert.match(String(version), /^\d+\.\d+\.\d+$/, name);
+      }
+      assert.ok(!pkg.dependencies || Object.keys(pkg.dependencies).length === 0);
     });
   });
 
@@ -446,7 +461,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
         `capture-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
       );
       const result = await runCliAsync(
-        ["check", text, "--endpoint", "https://typesafe.test/v1/systemone"],
+        ["check", text],
         {
           env: {
             TYPESAFE_API_KEY: options?.apiKey ?? "test-api-key",
@@ -504,16 +519,7 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       assert.match(result.stderr + result.stdout, /missing.*api.*key|TYPESAFE_API_KEY/i);
     });
 
-    it("keeps a missing check endpoint value in existing positional handling", () => {
-      const result = runCli(["check", "--endpoint"], {
-        env: { TYPESAFE_API_KEY: "" },
-      });
-
-      assert.notEqual(result.status, 0);
-      assert.match(result.stderr + result.stdout, /missing.*api.*key/i);
-    });
-
-    it("redacts API keys from errors when API fails", async () => {
+    it("reports API failures by fixed category without the response body or key", async () => {
       const apiKey = "synthetic-key-for-redaction";
       const { result } = await runMockedCheck(
         "echo test",
@@ -524,7 +530,32 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       assert.notStrictEqual(result.status, 0);
       const combined = result.stderr + result.stdout;
       assert.equal(combined.includes(apiKey), false);
-      assert.match(combined, /\[REDACTED\]/);
+      assert.equal(combined.includes("Invalid secret"), false);
+      assert.match(result.stderr, /no TypeSafe judgment available \(HTTP_401, HTTP 401\)/);
+    });
+
+    it("ignores an --endpoint flag and sends only to the configured endpoint", async () => {
+      const helpResult = runCli(["--help"]);
+      assert.strictEqual(helpResult.status, 0);
+      assert.ok(!helpResult.stdout.includes("--endpoint"), "help must not include --endpoint");
+
+      const home = fs.mkdtempSync(path.join(tempDir, "home-"));
+      const callsPath = path.join(tempDir, `calls-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`);
+      const result = await runCliAsync(
+        ["check", "ls", "--endpoint", "https://evil.test/x"],
+        {
+          env: {
+            HOME: home,
+            TYPESAFE_API_KEY: "test-api-key",
+            NODE_OPTIONS: `--import=${mockFetchImport}`,
+            CLAUDE_JEV_TEST_CALLS: callsPath,
+            CLAUDE_JEV_TEST_RESPONSE: gateResponse(0.1, 0),
+          },
+        }
+      );
+      assert.strictEqual(result.status, 0, `CLI error: ${result.stderr}`);
+      const urls = fs.readFileSync(callsPath, "utf8").trim().split("\n");
+      assert.deepEqual(urls, ["https://api.typesafe.ai/v1/systemone"]);
     });
   });
 
@@ -532,277 +563,286 @@ describe("claude-jev CLI", { concurrency: false }, () => {
     const mockFetchImport = pathToFileURL(
       path.join(REPO_ROOT, "tests", "fixtures", "mock-fetch.mjs")
     ).href;
-    const stateSecret = "PRIVATE_USAGE_ECHO_STATE_6072";
-    const state = {
-      decision: "Choose the option that fits the stated constraints.",
-      constraints: ["Keep existing user data intact.", stateSecret],
-    };
-    const questions = {
-      option_a_fit: {
-        type: "noul",
-        instructions: "Does Option A fit the stated constraints?",
-      },
-      option_b_fit: {
-        type: "noul",
-        instructions: "Does Option B fit the stated constraints?",
+    const SECRET = "STATE-SECRET-MARKER-42";
+    const request = {
+      state: { decision: "Pick a database", facts: [SECRET] },
+      questions: {
+        fit_a: { type: "score", instructions: "How well does A fit?", criteria: ["Poor", "Mixed", "Strong"] },
+        pick: { type: "choice", instructions: "Which option?", criteria: { a: "Option A", b: null } },
+        risky: { type: "noul", instructions: "Is either option risky?" },
       },
     };
-    const validInput = JSON.stringify({ state, questions });
-    const validResponse = {
-      model: "provider/custom-model-v2",
+    const okResponse = (model = "jev-1.13.0") => JSON.stringify({
+      model,
+      debug: SECRET,
       answers: {
-        option_a_fit: { type: "noul", noul: 0.8 },
-        option_b_fit: { type: "noul", noul: 0.4 },
-      },
-      usage: {
-        input_tokens: 12,
-        output_tokens: 0,
-        echoed_state: stateSecret,
-      },
-      internal_response_field: "RESPONSE_EXTENSION_SECRET",
-    };
-
-    const inputWithUtf8Bytes = (targetBytes: number) => {
-      const baseQuestions = {
-        ...questions,
-        option_a_fit: { ...questions.option_a_fit, instructions: "" },
-      };
-      const baseInput = JSON.stringify({ state, questions: baseQuestions });
-      const fillBytes = targetBytes - Buffer.byteLength(baseInput, "utf8");
-      const instructions = "é".repeat(Math.floor(fillBytes / 2)) +
-        (fillBytes % 2 === 1 ? "a" : "");
-      const input = JSON.stringify({
-        state,
-        questions: {
-          ...baseQuestions,
-          option_a_fit: { ...baseQuestions.option_a_fit, instructions },
+        fit_a: {
+          type: "score",
+          score: 1.6,
+          legend: { "0": "Poor", "1": "Mixed", "2": "Strong" },
+          probabilities: { "0": 0.1, "1": 0.2, "2": 0.7 },
+          confidence: 0.8,
         },
-      });
-      assert.equal(Buffer.byteLength(input, "utf8"), targetBytes);
-      assert.ok(input.length < targetBytes);
-      return input;
-    };
+        pick: { type: "choice", choice: "a", probabilities: { a: 0.7, b: 0.3 }, confidence: 0.6 },
+        risky: { type: "noul", noul: 0.2 },
+        unrequested: { type: "noul", noul: 0.9 },
+      },
+      usage: { input_tokens: 10, output_tokens: 3, trace: SECRET },
+    });
 
-    const runMockedAsk = async (
-      args: string[] = ["ask"],
-      input: string = validInput,
-      response: unknown = validResponse,
-      options?: { apiKey?: string; model?: string; status?: number }
+    const runAsk = async (
+      input: string,
+      options?: { args?: string[]; response?: string; status?: number; apiKey?: string | null; model?: string }
     ) => {
-      const caseDir = fs.mkdtempSync(path.join(tempDir, "ask-case-"));
-      const cwd = path.join(caseDir, "project");
-      const home = path.join(caseDir, "home");
-      fs.mkdirSync(cwd, { recursive: true });
-      fs.mkdirSync(home, { recursive: true });
-
+      const home = fs.mkdtempSync(path.join(tempDir, "home-"));
       if (options?.model !== undefined) {
-        const globalConfigDir = path.join(home, ".claude");
-        fs.mkdirSync(globalConfigDir, { recursive: true });
+        fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
         fs.writeFileSync(
-          path.join(globalConfigDir, "claude-jev.json"),
-          JSON.stringify({ model: options.model }),
-          "utf8"
+          path.join(home, ".claude", "claude-jev.json"),
+          JSON.stringify({ model: options.model })
         );
       }
-
-      const capturePath = path.join(caseDir, "request.json");
-      const callCountPath = path.join(caseDir, "call-count.txt");
-      const result = await runCliAsync(args, {
-        cwd,
+      const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const capturePath = path.join(tempDir, `ask-capture-${id}.json`);
+      const callsPath = path.join(tempDir, `ask-calls-${id}.txt`);
+      const result = await runCliAsync(["ask", ...(options?.args ?? [])], {
         input,
+        cwd: home,
         env: {
           HOME: home,
-          TYPESAFE_API_KEY: options?.apiKey ?? "test-api-key",
+          TYPESAFE_API_KEY: options?.apiKey === null ? "" : options?.apiKey ?? "test-api-key",
           NODE_OPTIONS: `--import=${mockFetchImport}`,
           CLAUDE_JEV_TEST_CAPTURE: capturePath,
-          CLAUDE_JEV_TEST_CALL_COUNT: callCountPath,
-          CLAUDE_JEV_TEST_RESPONSE:
-            typeof response === "string" ? response : JSON.stringify(response),
+          CLAUDE_JEV_TEST_CALLS: callsPath,
+          CLAUDE_JEV_TEST_RESPONSE: options?.response ?? okResponse(),
           CLAUDE_JEV_TEST_STATUS: String(options?.status ?? 200),
         },
       });
-      const request = fs.existsSync(capturePath)
+      const body = fs.existsSync(capturePath)
         ? JSON.parse(fs.readFileSync(capturePath, "utf8"))
         : undefined;
-      const callCount = fs.existsSync(callCountPath)
-        ? Number(fs.readFileSync(callCountPath, "utf8"))
-        : 0;
-      return { result, request, callCount };
+      const calls = fs.existsSync(callsPath)
+        ? fs.readFileSync(callsPath, "utf8").trim().split("\n")
+        : [];
+      return { result, body, calls };
     };
 
-    it("lists ask in help output", () => {
+    it("documents ask in help", () => {
       const result = runCli(["--help"]);
-
-      assert.equal(result.status, 0);
-      assert.match(result.stdout, /claude-jev ask/i);
+      assert.match(result.stdout, /claude-jev ask < request\.json/);
     });
 
-    it("sends configured model and all questions once, then prints only validated fields", async () => {
-      const selectedModel = "provider/custom-model-v2";
-      const { result, request, callCount } = await runMockedAsk(
-        ["ask"],
-        validInput,
-        validResponse,
-        { model: selectedModel }
-      );
+    it("sends all questions in one request with the configured model and prints validated JSON", async () => {
+      const { result, body, calls } = await runAsk(JSON.stringify(request));
+      assert.strictEqual(result.status, 0, `CLI error: ${result.stderr}`);
+      assert.equal(calls.length, 1);
+      assert.equal(body.model, "jev-latest");
+      assert.deepEqual(Object.keys(body.questions).sort(), ["fit_a", "pick", "risky"]);
+      assert.deepEqual(body.state, request.state);
 
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(callCount, 1);
-      assert.deepEqual(request, {
-        model: selectedModel,
-        state,
-        questions,
-      });
-      const output = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(output).sort(), ["answers", "model", "usage"]);
-      assert.deepEqual(output, {
-        model: validResponse.model,
-        usage: { input_tokens: 12, output_tokens: 0 },
-        answers: validResponse.answers,
-      });
-      assert.equal(result.stdout.includes("RESPONSE_EXTENSION_SECRET"), false);
-      assert.equal(result.stdout.includes(stateSecret), false);
+      const out = JSON.parse(result.stdout);
+      assert.deepEqual(Object.keys(out), ["model", "usage", "answers"]);
+      assert.equal(out.model, "jev-1.13.0");
+      assert.deepEqual(out.usage, { input_tokens: 10, output_tokens: 3 });
+      assert.deepEqual(Object.keys(out.answers).sort(), ["fit_a", "pick", "risky"]);
+      assert.equal(out.answers.pick.choice, "a");
+      assert.equal(result.stdout.includes(SECRET), false);
       assert.equal(result.stderr, "");
     });
 
-    it("fails safely when the API key is missing", async () => {
-      const { result, request, callCount } = await runMockedAsk(
-        ["ask"],
-        validInput,
-        validResponse,
-        { apiKey: "" }
-      );
-
-      assert.notEqual(result.status, 0);
-      assert.match(result.stderr + result.stdout, /missing.*api.*key/i);
-      assert.equal(request, undefined);
-      assert.equal(callCount, 0);
+    it("uses the model from trusted global config", async () => {
+      const { result, body } = await runAsk(JSON.stringify(request), {
+        model: "jev-preview",
+        response: okResponse("jev-1.13.0"),
+      });
+      assert.strictEqual(result.status, 0, `CLI error: ${result.stderr}`);
+      assert.equal(body.model, "jev-preview");
     });
 
-    it("rejects invalid input without making a network request or echoing it", async () => {
-      const privateState = "PRIVATE_DECISION_STATE_3128";
-      const { result, request, callCount } = await runMockedAsk(
-        ["ask"],
-        `{"state":"${privateState}"`,
-        validResponse
-      );
-
-      assert.notEqual(result.status, 0);
-      assert.equal(request, undefined);
-      assert.equal(callCount, 0);
-      assert.match(result.stderr + result.stdout, /invalid decision request/i);
-      assert.equal((result.stdout + result.stderr).includes(privateState), false);
+    it("rejects a cross-family model answer without falling back", async () => {
+      const { result, calls } = await runAsk(JSON.stringify(request), {
+        model: "kev-latest",
+        response: okResponse("jev-1.13.0"),
+      });
+      assert.equal(result.status, 1);
+      assert.equal(calls.length, 1);
+      assert.match(result.stderr, /no TypeSafe judgment available \(MODEL_MISMATCH\)/);
+      assert.equal(result.stdout, "");
     });
 
-    it("accepts exactly 64 KiB of UTF-8 input and rejects one byte above before a request", async () => {
-      const atLimit = await runMockedAsk(["ask"], inputWithUtf8Bytes(64 * 1024));
-      assert.equal(atLimit.result.status, 0, atLimit.result.stderr);
-      assert.equal(atLimit.callCount, 1);
-      assert.ok(JSON.parse(atLimit.result.stdout).answers.option_a_fit);
-      assert.equal(Object.keys(atLimit.request.questions).length, 2);
-
-      const aboveLimit = await runMockedAsk(["ask"], inputWithUtf8Bytes(64 * 1024 + 1));
-      assert.notEqual(aboveLimit.result.status, 0);
-      assert.equal(aboveLimit.request, undefined);
-      assert.equal(aboveLimit.callCount, 0);
-      assert.match(aboveLimit.result.stderr + aboveLimit.result.stdout, /64\s*KiB|too large/i);
+    it("reports an unavailable model without the response body or submitted state", async () => {
+      const { result, calls } = await runAsk(JSON.stringify(request), {
+        model: "kev-latest",
+        status: 422,
+        response: `unknown model; echo ${SECRET}`,
+      });
+      assert.equal(result.status, 1);
+      assert.equal(calls.length, 1);
+      assert.match(result.stderr, /HTTP_422, HTTP 422\) for model kev-latest/);
+      assert.equal(result.stderr.includes(SECRET), false);
+      assert.equal(result.stdout, "");
     });
 
-    it("accepts 32 questions and rejects 33 before a request", async () => {
-      const questionsAtLimit = Object.fromEntries(
-        Array.from({ length: 32 }, (_, index) => [
-          `q${index}`,
-          { type: "noul", instructions: `Evaluate question ${index}.` },
-        ])
+    it("fails on a malformed response without fabricating answers", async () => {
+      const bad = JSON.parse(okResponse());
+      delete bad.answers.pick;
+      const { result } = await runAsk(JSON.stringify(request), { response: JSON.stringify(bad) });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /MALFORMED_RESPONSE/);
+      assert.equal(result.stdout, "");
+    });
+
+    it("rejects invalid input before any request", async () => {
+      for (const input of ["", "not json", JSON.stringify({ state: {}, questions: {} })]) {
+        const { result, calls } = await runAsk(input);
+        assert.equal(result.status, 2, input);
+        assert.match(result.stderr, /invalid decision request/);
+        assert.equal(calls.length, 0);
+      }
+    });
+
+    it("accepts 32 questions and rejects 33 before any request", async () => {
+      const make = (n: number) => {
+        const questions: Record<string, unknown> = {};
+        for (let i = 0; i < n; i++) questions[`q${i}`] = { type: "noul", instructions: "Is it?" };
+        return JSON.stringify({ state: "s", questions });
+      };
+      const answers: Record<string, unknown> = {};
+      for (let i = 0; i < 32; i++) answers[`q${i}`] = { type: "noul", noul: 0.5 };
+      const ok = await runAsk(make(32), {
+        response: JSON.stringify({ model: "jev-1.13.0", answers, usage: { input_tokens: 1, output_tokens: 1 } }),
+      });
+      assert.strictEqual(ok.result.status, 0, ok.result.stderr);
+      assert.equal(ok.calls.length, 1);
+
+      const tooMany = await runAsk(make(33));
+      assert.equal(tooMany.result.status, 2);
+      assert.equal(tooMany.calls.length, 0);
+    });
+
+    it("rejects oversized streamed input and never echoes it", async () => {
+      const input = JSON.stringify({ state: SECRET + "x".repeat(70 * 1024), questions: request.questions });
+      const { result, calls } = await runAsk(input);
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /INPUT_TOO_LARGE/);
+      assert.equal(result.stderr.includes(SECRET), false);
+      assert.equal(calls.length, 0);
+    });
+
+    it("keeps invalid question text out of diagnostics", async () => {
+      const input = JSON.stringify({
+        state: SECRET,
+        questions: { q: { type: "score", instructions: SECRET, criteria: [SECRET] } },
+      });
+      const { result, calls } = await runAsk(input);
+      assert.equal(result.status, 2);
+      assert.equal(result.stderr.includes(SECRET), false);
+      assert.equal(calls.length, 0);
+    });
+
+    it("requires an API key after validating input", async () => {
+      const { result, calls } = await runAsk(JSON.stringify(request), { apiKey: null });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Missing TypeSafe API key/);
+      assert.equal(calls.length, 0);
+    });
+
+    it("calls a local Kev endpoint without TYPESAFE_API_KEY or an Authorization header", async () => {
+      const home = fs.mkdtempSync(path.join(tempDir, "home-"));
+      fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, ".claude", "claude-jev.json"),
+        JSON.stringify({ model: "kev-latest", endpoint: "http://127.0.0.1:8009/v1/systemone" })
       );
-      const questionsAboveLimit = Object.fromEntries(
-        Array.from({ length: 33 }, (_, index) => [
-          `q${index}`,
-          { type: "noul", instructions: `Evaluate question ${index}.` },
-        ])
-      );
-      const answers = Object.fromEntries(
-        Array.from({ length: 32 }, (_, index) => [`q${index}`, { type: "noul", noul: 0.5 }])
-      );
-      const response = {
-        model: "jev-latest",
-        answers,
-        usage: { input_tokens: 1, output_tokens: 0 },
+      const callsPath = path.join(tempDir, `ask-local-${Date.now()}.txt`);
+      const result = await runCliAsync(["ask"], {
+        input: JSON.stringify(request),
+        cwd: home,
+        env: {
+          HOME: home,
+          TYPESAFE_API_KEY: "",
+          NODE_OPTIONS: `--import=${mockFetchImport}`,
+          CLAUDE_JEV_TEST_CALLS: callsPath,
+          CLAUDE_JEV_TEST_RESPONSE: okResponse("kev-latest"),
+        },
+      });
+      assert.strictEqual(result.status, 0, `CLI error: ${result.stderr}`);
+      assert.deepEqual(fs.readFileSync(callsPath, "utf8").trim().split("\n"), [
+        "http://127.0.0.1:8009/v1/systemone",
+      ]);
+      assert.equal(JSON.parse(result.stdout).model, "kev-latest");
+
+      const status = runCli(["status"], { cwd: home, env: { HOME: home, TYPESAFE_API_KEY: "" } });
+      assert.match(status.stdout, /not required for local endpoint/);
+      assert.match(status.stdout, /Endpoint: local/);
+    });
+
+    it("rejects model, endpoint, and positional overrides", async () => {
+      for (const args of [
+        ["--model", "kev-latest"],
+        ["--model"],
+        ["--model=kev-latest"],
+        ["--endpoint", "https://evil.test/x"],
+        ["extra"],
+      ]) {
+        const { result, calls } = await runAsk(JSON.stringify(request), { args });
+        assert.equal(result.status, 2, args.join(" "));
+        assert.match(result.stderr, /ask takes no arguments or options/);
+        assert.equal(calls.length, 0);
+      }
+    });
+
+    it("times out when stdin remains idle without input", async () => {
+      const home = fs.mkdtempSync(path.join(tempDir, "home-"));
+      const mergedEnv = {
+        ...process.env,
+        HOME: home,
+        CLAUDE_JEV_STDIN_TIMEOUT_MS: "300",
       };
 
-      const atLimit = await runMockedAsk(
-        ["ask"],
-        JSON.stringify({ state: { decision: "Choose." }, questions: questionsAtLimit }),
-        response
-      );
-      assert.equal(atLimit.result.status, 0, atLimit.result.stderr);
-      assert.equal(atLimit.callCount, 1);
-      assert.equal(Object.keys(atLimit.request.questions).length, 32);
+      const result = await new Promise<RunResult>((resolve, reject) => {
+        const child = spawn(process.execPath, [BIN_PATH, "ask"], {
+          cwd: home,
+          env: mergedEnv as NodeJS.ProcessEnv,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
 
-      const aboveLimit = await runMockedAsk(
-        ["ask"],
-        JSON.stringify({ state: { decision: "Choose." }, questions: questionsAboveLimit }),
-        response
-      );
-      assert.notEqual(aboveLimit.result.status, 0);
-      assert.equal(aboveLimit.request, undefined);
-      assert.equal(aboveLimit.callCount, 0);
-    });
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        let done = false;
 
-    it("does not fall back to Jev when the configured model fails", async () => {
-      const selectedModel = "provider/unavailable-model";
-      const privateState = "PRIVATE_MODEL_FAILURE_STATE_4481";
-      const { result, request, callCount } = await runMockedAsk(
-        ["ask"],
-        JSON.stringify({ state: { note: privateState }, questions }),
-        `Upstream rejected request containing ${privateState}`,
-        { model: selectedModel, status: 404 }
-      );
+        const timer = setTimeout(() => {
+          if (!done) {
+            done = true;
+            child.kill();
+            reject(new Error("Process did not end within 5 seconds"));
+          }
+        }, 5000);
 
-      assert.notEqual(result.status, 0);
-      assert.ok(request, "ask must send selected-model request");
-      assert.equal(callCount, 1);
-      assert.equal(request.model, selectedModel);
-      assert.match(result.stderr, /404/);
-      assert.equal((result.stdout + result.stderr).includes(privateState), false);
-      assert.equal(result.stderr.includes("Upstream rejected"), false);
-    });
+        child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+        child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+        child.on("error", (err) => {
+          if (!done) {
+            done = true;
+            clearTimeout(timer);
+            reject(err);
+          }
+        });
+        child.on("close", (status) => {
+          if (!done) {
+            done = true;
+            clearTimeout(timer);
+            resolve({
+              status,
+              stdout: Buffer.concat(stdout).toString("utf-8"),
+              stderr: Buffer.concat(stderr).toString("utf-8"),
+            });
+          }
+        });
+      });
 
-    it("reports malformed responses without echoing state or response fields", async () => {
-      const privateState = "PRIVATE_MALFORMED_RESPONSE_STATE_7791";
-      const { result, request, callCount } = await runMockedAsk(
-        ["ask"],
-        JSON.stringify({ state: { note: privateState }, questions }),
-        {
-          model: "provider/custom-model-v2",
-          answers: { option_a_fit: { type: "noul", noul: "invalid" } },
-          usage: { input_tokens: 1, output_tokens: 0 },
-          echoed_state: privateState,
-        }
-      );
-
-      assert.notEqual(result.status, 0);
-      assert.ok(request, "ask must send request before response validation");
-      assert.equal(callCount, 1);
-      assert.equal((result.stdout + result.stderr).includes(privateState), false);
-      assert.equal(result.stderr.includes("echoed_state"), false);
-    });
-
-    it("rejects per-request model, endpoint, and positional overrides", async () => {
-      for (const args of [
-        ["ask", "--model", "jev-latest"],
-        ["ask", "--model"],
-        ["ask", "--endpoint", "https://typesafe.test/v1/systemone"],
-        ["ask", "--endpoint"],
-        ["ask", "unexpected-position"],
-      ]) {
-        const { result, request, callCount } = await runMockedAsk(args);
-
-        assert.notEqual(result.status, 0, args.join(" "));
-        assert.match(result.stderr + result.stdout, /ask command.*does not accept/i);
-        assert.equal(request, undefined, args.join(" "));
-        assert.equal(callCount, 0, args.join(" "));
-      }
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /no input arrived within 300 ms/);
     });
   });
 
@@ -947,42 +987,75 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       );
     });
   });
+  describe("decide skill and decision helper docs", () => {
+    const decidePath = path.join(REPO_ROOT, "skills", "decide", "SKILL.md");
+    const read = (...parts: string[]) =>
+      fs.readFileSync(path.join(REPO_ROOT, ...parts), "utf8");
 
-  describe("decision skill", () => {
-    const decideSkillPath = path.join(REPO_ROOT, "skills", "decide", "SKILL.md");
+    it("decide skill is user-invoked only and names the ask command", () => {
+      assert.ok(fs.existsSync(decidePath), "skills/decide/SKILL.md must exist");
+      const content = fs.readFileSync(decidePath, "utf8");
+      assert.match(content, /^---\n[\s\S]*?\n---/);
+      assert.match(content, /name:\s*decide/i);
+      assert.match(content, /disable-model-invocation:\s*true/i);
+      assert.match(content, /claude-jev ask/i);
+    });
 
-    it("has required on-demand workflow and trust boundaries", () => {
-      assert.ok(fs.existsSync(decideSkillPath), "skills/decide/SKILL.md must exist");
-      const content = fs.readFileSync(decideSkillPath, "utf8");
-      assert.ok(content.startsWith("---"), "decision skill needs frontmatter");
-      const frontmatterEnd = content.indexOf("---", 3);
-      assert.ok(frontmatterEnd > 3, "decision skill needs closing frontmatter");
-      assert.match(content.slice(3, frontmatterEnd), /name:\s*decide/i);
+    it("decide skill requires follow-ups, confirmation, and advisory handling", () => {
+      const content = fs.readFileSync(decidePath, "utf8");
+      assert.match(content, /follow-up questions?/i);
+      assert.match(content, /confirmation[\s\S]*before|before[\s\S]*confirm/i);
+      assert.match(content, /noul/i);
+      assert.match(content, /score/i);
+      assert.match(content, /choice/i);
+      assert.match(content, /advisory/i);
+      assert.match(content, /not[^.\n]*authorization/i);
+      assert.match(content, /no automatic model fallback|never retry with another model|do not retry with another model/i);
+    });
 
-      for (const [pattern, label] of [
-        [/claude-jev ask/i, "CLI command"],
-        [/node\s+["']\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/claude-jev["']\s+ask/i, "bundled CLI path"],
-        [/follow-up/i, "focused user follow-up"],
-        [/bounded/i, "bounded context"],
-        [/sensitive/i, "sensitive-data handling"],
-        [/noul/i, "Noul questions"],
-        [/choice/i, "Choice questions"],
-        [/score/i, "Score questions"],
-        [/advisory/i, "advisory-only results"],
-        [/recommendation/i, "Claude's own recommendation"],
-      ]) {
-        assert.match(content, pattern, `Decision skill is missing ${label}`);
+    it("jev skill links the decide skill", () => {
+      const content = fs.readFileSync(SKILL_PATH, "utf8");
+      assert.match(content, /\/claude-jev:decide/);
+    });
+
+    it("README documents ask, hosted model ID, and limits", () => {
+      const readme = read("README.md");
+      assert.match(readme, /claude-jev ask/i);
+      assert.match(readme, /jev-1\.13\.0/i);
+      assert.match(readme, /64 KiB/i);
+      assert.match(readme, /32 questions/i);
+      assert.match(readme, /\/claude-jev:decide/);
+    });
+
+    it("guides document the decision helper", () => {
+      for (const file of ["type-safe-integration.md", "reliability-and-privacy.md", "architecture.md"]) {
+        assert.match(read("docs", file), /claude-jev ask/i, `${file} must mention claude-jev ask`);
       }
     });
+  });
+});
 
-    it("links the decision skill from Jev skill and README", () => {
-      const jevSkill = fs.readFileSync(SKILL_PATH, "utf8");
-      const readme = fs.readFileSync(path.join(REPO_ROOT, "README.md"), "utf8");
+describe("local models guide", () => {
+  const guidePath = path.join(REPO_ROOT, "docs", "local-models.md");
+  const readText = (...parts: string[]) => fs.readFileSync(path.join(REPO_ROOT, ...parts), "utf8");
 
-      assert.match(jevSkill, /\.\.\/decide\/SKILL\.md/);
-      assert.match(readme, /\/claude-jev:decide/);
-      assert.ok(readme.includes("docs/type-safe-integration.md"));
-      assert.ok(readme.includes("docs/reliability-and-privacy.md"));
-    });
+  it("exists and is packaged", () => {
+    assert.ok(fs.existsSync(guidePath));
+    const pkg = JSON.parse(readText("package.json")) as { files: string[] };
+    assert.ok(pkg.files.includes("docs/local-models.md"));
+  });
+
+  it("is linked from the README", () => {
+    assert.match(readText("README.md"), /docs\/local-models\.md/);
+  });
+
+  it("has the pinned commits, loopback flags, and agent prompt", () => {
+    const guide = fs.readFileSync(guidePath, "utf8");
+    assert.ok(guide.includes("0c142becde423a0c68ec857f7831dac0315588a1"));
+    assert.ok(guide.includes("9d955671415fc19f069b9cc998928075c1f255ec"));
+    assert.ok(guide.includes("LAYA_HOST=127.0.0.1"));
+    assert.ok(guide.includes("--host 127.0.0.1"));
+    assert.match(guide, /^#+ .*prompt for an ai agent/im);
+    assert.ok(!guide.includes("\u2014"), "guide must not contain em dashes");
   });
 });

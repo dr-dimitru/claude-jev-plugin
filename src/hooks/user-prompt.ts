@@ -5,10 +5,14 @@
  * Returns no stdout to Claude Code. Never fails with non-zero exit code.
  */
 
+import * as os from "node:os";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { sessionStore } from "../hook-io.ts";
+import { hashSessionIdentity, resolveSessionBaseDir, sessionStore } from "../hook-io.ts";
+import { resolveCacheBase } from "../cache.ts";
+import { maybePruneSessionData } from "../retention.ts";
 import { readHookPayload } from "./common.ts";
-import { loadConfig } from "../config.ts";
+import { canCallTypeSafe, loadConfig } from "../config.ts";
 
 export interface UserPromptPayload {
   session_id?: string;
@@ -48,8 +52,24 @@ export async function runUserPrompt(payload?: unknown): Promise<void> {
         scratchpadDir,
       });
       const overrides = await store.getOverrides();
-      if (!(overrides.enabled ?? config.gate.enabled) || !config.apiKey) return;
-      await store.setPrompt(prompt);
+      if ((overrides.enabled ?? config.gate.enabled) && canCallTypeSafe(config)) {
+        await store.setPrompt(prompt);
+      }
+      // Retention sweep runs regardless of gate state; throttled to once a day.
+      const roots = [
+        ...new Set([
+          resolveSessionBaseDir({ scratchpadDir }),
+          resolveCacheBase({ scratchpadDir }),
+          // Legacy root: older versions stored state here even when
+          // CLAUDE_PLUGIN_DATA was set. Data ages out via retention.
+          path.join(process.env.HOME ?? os.homedir(), ".cache", "claude-jev"),
+        ]),
+      ];
+      await maybePruneSessionData({
+        roots,
+        retentionDays: config.retentionDays,
+        keepNames: [hashSessionIdentity(sessionId, agentId)],
+      });
     }
   } catch {
     // Fail-open: write nothing to stdout

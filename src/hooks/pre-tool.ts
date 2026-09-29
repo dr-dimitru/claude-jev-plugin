@@ -15,7 +15,7 @@
 
 import { pathToFileURL } from "node:url";
 import { sessionStore } from "../hook-io.ts";
-import { loadConfig } from "../config.ts";
+import { canCallTypeSafe, loadConfig } from "../config.ts";
 import { buildGateState } from "../state.ts";
 import { GATE_QUESTIONS, evaluateGate, judgmentKey, type GateVerdict } from "../gate.ts";
 import { getOrCreateCached } from "../cache.ts";
@@ -112,7 +112,7 @@ export async function runPreTool(
     }
 
     // 4. Missing API key check
-    if (!config.apiKey || config.apiKey.trim().length === 0) {
+    if (!canCallTypeSafe(config)) {
       return await emitDiagnostic<PreToolOutput>("MISSING_KEY", store);
     }
 

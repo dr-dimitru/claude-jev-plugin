@@ -155,9 +155,11 @@ Global `~/.claude/claude-jev.json` may set model, HTTPS endpoint, total timeout,
 
 Project `.claude/claude-jev.json` may set gate/output enablement, mode, tools, bounds, cache duration, thresholds, and `blockWithoutUI`. It cannot set model, endpoint, timeout, retries, API key, or key file. This prevents repository-controlled credential and data redirection.
 
-The global `model` setting defaults to `jev-latest`. The client forwards a non-empty configured ID unchanged. An unavailable or incompatible selection returns no validated judgment; the client does not retry with Jev. Check alternate IDs in TypeSafe's [model docs](https://docs.typesafe.ai/models) or `GET /v1/models`, then confirm the [System One response contract](https://docs.typesafe.ai/api).
+Remote endpoints must use HTTPS. Plain `http:` is allowed only for a local endpoint, meaning hostname `localhost`, `127.x.x.x`, or `[::1]`. No endpoint may contain embedded credentials.
 
-Endpoints must use HTTPS and cannot contain embedded credentials.
+A local endpoint needs no API key. The client sends no Authorization header without one and never sends `TYPESAFE_API_KEY` to a local endpoint. A key for a local server (`KEV_API_KEY` or `LAYA_API_KEY`) goes in the global `apiKeyFile`. Laya binds 0.0.0.0 by default; start it with LAYA_HOST=127.0.0.1 to keep it on loopback.
+
+With a local model such as Kev (https://github.com/jaredpalmer/kev) or Laya (https://github.com/NandhaKishorM/laya), state and questions stay on the machine and TypeSafe does not bill them. Hooks and `claude-jev ask` still send the same data to that local process. `claude-jev status` shows `Endpoint: local` or `Endpoint: remote`.
 
 ## External data
 
@@ -173,11 +175,23 @@ Plugin does not send full transcript, session ID, agent ID, transcript path, per
 
 Secret detection has an unavoidable privacy tradeoff: bounded output may already contain the secret TypeSafe is asked to identify.
 
-## Custom decision requests
+## Decision helper data
 
-`claude-jev ask` sends only its `state` and `questions` fields to the configured TypeSafe endpoint. It does not send conversation history. The command enforces local limits of 64 KiB for complete JSON input, the configured `maxStateChars` value (8,000 by default), and 32 questions. Global or project configuration can set `maxStateChars`. TypeSafe API usage may incur cost.
+`claude-jev ask` sends the whole `state` object and every question, including instructions and criteria, to TypeSafe in one request. Nothing is elided. The caller controls the content, so treat all of it as leaving the machine. TypeSafe bills each request. Retries resend the full body, for up to 1 plus `retries` attempts within `timeoutMs`.
 
-The `/claude-jev:decide` skill asks before sending sensitive details. TypeSafe results remain advisory. An unavailable model or invalid response does not count as a clear result, and the command does not switch models automatically. The skill reports that no TypeSafe judgment is available and continues with Claude's ordinary reasoning.
+The `/claude-jev:decide` skill runs only when the user invokes it. It shows the user a summary of what will be sent and requires confirmation before every request, with sensitive details flagged. It excludes conversation history and secrets from state. TypeSafe output is evidence, not consent or authorization.
+
+Input limits apply before any request:
+
+- 64 KiB of UTF-8 input;
+- serialized state up to `maxStateChars` (default 8000);
+- 1 to 32 questions with valid names;
+- instructions up to 2000 characters, criteria up to 500 characters;
+- Score 2 to 10 criteria, Choice 2 to 20 criteria.
+
+Invalid input exits with code 2 and sends nothing. TypeSafe or configuration errors exit with code 1. Error output has only a fixed category, code, HTTP status, and model. It never includes response bodies, state, or question text.
+
+The client makes no model fallback. The model-family check applies only to remote endpoints. A local server is run by the user and may report its own checkpoint name (Laya answers `english` requests as `laya-rl-agent`), so local responses are not rejected for a model mismatch. Remote endpoints fail with `MODEL_MISMATCH` on a cross-family answer.
 
 ## Local state
 
@@ -211,7 +225,9 @@ flowchart TD
 
 State contains bounded prompt, session overrides, latest verdict summaries, seen tool IDs, and diagnostic timestamps. Session filenames hash session and optional agent identities. Files use restrictive permissions and locked atomic updates.
 
-Scratchpad lifetime is managed by Claude Code. Plugin data persists through updates and is removed by uninstall unless `--keep-data` is used. Legacy fallback has no automatic retention sweep.
+Session state and judgment caches share one root. With a scratchpad, state is `<scratchpad>/<hash>.json` and caches are `<scratchpad>/cache/<hash>`. With `CLAUDE_PLUGIN_DATA`, state is `$CLAUDE_PLUGIN_DATA/sessions` and caches are `$CLAUDE_PLUGIN_DATA/cache`. Otherwise both use `~/.cache/claude-jev`. Older versions kept caches in `~/.cache/claude-jev/cache` even when plugin data existed. The retention sweep also prunes that legacy tree, so it ages out after `retentionDays`.
+
+Scratchpad lifetime is managed by Claude Code. Plugin data persists through updates and is removed by uninstall unless `--keep-data` is used. Retention. Session state files and per-session cache directories older than `retentionDays` (default 7, global configuration only, `0` disables) are deleted by `UserPromptSubmit`, at most once per day. A marker file `.last-prune` in the first existing state directory throttles the sweep. The sweep skips the current session, deletes at most 500 items per run, never follows symlinks, and touches only files named by the plugin's hash patterns. It fails open.
 
 ## Related guides
 

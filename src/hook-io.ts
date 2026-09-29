@@ -157,6 +157,33 @@ export interface SessionStore {
 }
 
 /**
+ * Returns the directory that holds session state files for the given inputs.
+ */
+export function resolveSessionBaseDir(options: {
+  scratchpadDir?: string;
+  homeDir?: string;
+  env?: Record<string, string | undefined>;
+}): string {
+  const env = options.env ?? process.env;
+  if (options.scratchpadDir && options.scratchpadDir.trim().length > 0) {
+    return path.resolve(options.scratchpadDir.trim());
+  }
+  if (env.CLAUDE_PLUGIN_DATA?.trim()) {
+    return path.join(path.resolve(env.CLAUDE_PLUGIN_DATA.trim()), "sessions");
+  }
+  const userHome = options.homeDir ?? env.HOME ?? os.homedir();
+  return path.join(userHome, ".cache", "claude-jev");
+}
+
+/**
+ * Returns the sha256 hex name used for a session (and optional agent) identity.
+ */
+export function hashSessionIdentity(sessionId: string, agentId?: string): string {
+  const raw = agentId ? `${sessionId}:${agentId}` : sessionId;
+  return crypto.createHash("sha256").update(raw, "utf-8").digest("hex");
+}
+
+/**
  * Creates a session store instance for a given session_id and optional agent_id.
  * Safe against path traversal and concurrent corruption through atomic writes.
  */
@@ -168,23 +195,10 @@ export function sessionStore(options: SessionStoreOptions): SessionStore {
   const staleLockMs = options.staleLockMs ?? 5000;
   const pollIntervalMs = options.pollIntervalMs ?? 10;
 
-  // Determine safe base directory
-  let baseDir: string;
-  if (scratchpadDir && scratchpadDir.trim().length > 0) {
-    baseDir = path.resolve(scratchpadDir.trim());
-  } else if (env.CLAUDE_PLUGIN_DATA?.trim()) {
-    baseDir = path.join(path.resolve(env.CLAUDE_PLUGIN_DATA.trim()), "sessions");
-  } else {
-    const userHome = homeDir ?? env.HOME ?? os.homedir();
-    baseDir = path.join(userHome, ".cache", "claude-jev");
-  }
+  const baseDir = resolveSessionBaseDir({ scratchpadDir, homeDir, env });
 
   // Hash session identifier to prevent path traversal and ensure privacy
-  const rawIdentifier = agentId ? `${sessionId}:${agentId}` : sessionId;
-  const hashedName = crypto
-    .createHash("sha256")
-    .update(rawIdentifier, "utf-8")
-    .digest("hex");
+  const hashedName = hashSessionIdentity(sessionId, agentId);
 
   const filePath = path.join(baseDir, `${hashedName}.json`);
 

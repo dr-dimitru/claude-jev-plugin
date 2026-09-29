@@ -40,7 +40,7 @@ For local development:
 claude --plugin-dir /path/to/claude-jev-plugin
 ```
 
-API key is sent only as Bearer token to configured HTTPS TypeSafe endpoint. Do not commit it or place it in project configuration.
+API key is sent only as Bearer token to the configured endpoint, which is HTTPS unless it is local. `TYPESAFE_API_KEY` is never sent to a local endpoint. Do not commit it or place it in project configuration.
 
 ## Update, disable, and uninstall
 
@@ -59,6 +59,8 @@ Claude Code removes plugin data on uninstall unless `--keep-data` is passed. Leg
 - [Output judgments](docs/output-judgments.md)
 - [Reliability, privacy, and trust boundaries](docs/reliability-and-privacy.md)
 - [End-to-end judgment example](docs/end-to-end-example.md)
+- [Architecture and design notes](docs/architecture.md)
+- [Run local models (Kev and Laya)](docs/local-models.md)
 
 ## How judgments work
 
@@ -85,10 +87,7 @@ Pre-tool gate sends four independent questions in one API request:
 
 Shadow mode is default. Flagged action produces short warning and continues. Enforce mode returns Claude Code's native `permissionDecision: "ask"`. Plugin never returns `allow` from TypeSafe confidence.
 
-Successful and failed Bash results send two questions in one request:
-
-- `leaks_secret`, Noul threshold `0.90`;
-- `failure_class`, Choice confidence threshold `0.60`.
+Successful Bash output is asked only `leaks_secret` (Noul threshold `0.90`). Failed Bash output is asked both `leaks_secret` and `failure_class` (Choice confidence threshold `0.60`). Classifying successful output produced false advice, so successful commands never receive failure advice.
 
 Failure advice is fixed local text for `transient`, `environment`, `code_bug`, `permission`, and `user_error`. TypeSafe does not generate advice.
 
@@ -160,9 +159,9 @@ defaults -> global config -> project judgment config -> environment key -> sessi
 
 Project configuration cannot set `model`, `endpoint`, `timeoutMs`, `retries`, `apiKey`, or `apiKeyFile`. This prevents repository-controlled credential redirection. These transport fields are accepted only from trusted global configuration; plaintext JSON `apiKey` is not accepted. Relative global `apiKeyFile` resolves under `~/.claude`.
 
-Every endpoint must use HTTPS and cannot contain embedded credentials.
+`retentionDays` (default `7`, global configuration only) sets how long per-session state and judgment caches are kept. Once a day, `UserPromptSubmit` deletes data for other sessions that is older than this. `0` disables cleanup.
 
-The global `model` setting defaults to `jev-latest`. TypeSafe currently documents Jev and its aliases. Use `GET /v1/models` to check model names available to your account. The client sends a non-empty configured model ID unchanged and does not fall back when TypeSafe rejects it. Check any other ID against the [TypeSafe model docs](https://docs.typesafe.ai/models) and [API response contract](https://docs.typesafe.ai/api) before selecting it.
+Every remote endpoint must use HTTPS. Plain `http:` is allowed only for a local endpoint (`localhost`, `127.x.x.x`, or `[::1]`). No endpoint may contain embedded credentials. See [Model selection](#model-selection).
 
 Example project configuration:
 
@@ -189,10 +188,13 @@ Example project configuration:
     "tools": ["Bash"],
     "outputChars": 2000,
     "leakThreshold": 0.9,
-    "minConfidence": 0.6
+    "minConfidence": 0.6,
+    "successCheck": "prefilter"
   }
 }
 ```
+
+Setting `output.successCheck` controls when successful output is evaluated. Value `"prefilter"` (default) sends successful output to TypeSafe only when a local scan finds credential-like text or a secret-reading command. Value `"always"` sends every successful command output to TypeSafe.
 
 Example trusted global transport configuration:
 
@@ -205,6 +207,108 @@ Example trusted global transport configuration:
   "apiKeyFile": "typesafe.key"
 }
 ```
+
+## Model selection
+
+`model` is set only in trusted global configuration (`~/.claude/claude-jev.json`). Project configuration cannot set `model` or `endpoint`, and no CLI flag overrides either. The default is `jev-latest`.
+
+Hosted TypeSafe model IDs (source: https://docs.typesafe.ai/models):
+
+| ID | Meaning |
+| --- | --- |
+| `jev-1.13.0` | Current hosted model. |
+| `jev-latest` | Alias for `jev-1.13.0`. Plugin default. |
+| `jev-preview` | Alias for `jev-1.13.0`. |
+
+The response `model` field reports the versioned ID that answered.
+
+Any non-empty model ID in global configuration is sent unchanged. The plugin verifies only the hosted IDs above. Jev remains the default.
+
+### Local alternative models
+
+Two open-weight models are documented as local alternatives. Neither is served by TypeSafe. Both are assumed to run on your machine. The plugin does not test them against a live server. For a step-by-step setup with helper scripts and a prompt for an AI agent, see [Run local System One models](docs/local-models.md).
+
+| Model | Source | Start command | Default bind | Endpoint |
+| --- | --- | --- | --- | --- |
+| Kev | https://github.com/jaredpalmer/kev | `uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009` | `127.0.0.1` | `http://127.0.0.1:8009/v1/systemone` |
+| Laya | https://github.com/NandhaKishorM/laya | `LAYA_HOST=127.0.0.1 LAYA_DEVICE=mps laya-serve` | `0.0.0.0:8000` | `http://127.0.0.1:8000/v1/systemone` |
+
+Kev is an Apache-2.0 community model by Jared Palmer. Checkpoints are `jaredpalmer/kev-0.8b`, `kev-4b`, `kev-9b`, and `kev-27b`. It answers `POST /v1/systemone` with the TypeSafe wire contract, echoes the requested model, and adds `latency_ms`, which the plugin drops.
+
+Laya is an Apache-2.0 model by Convai Innovations. Checkpoints are `english`, `multilingual`, and `typed-decisions`. `LAYA_DEVICE` is `cuda`, `mps`, or `cpu`. The response `model` is `laya-rl-agent`, not the requested checkpoint name. The requested checkpoint appears in a top-level `routing` object (`routing.model`, `routing.reason`). The plugin drops `routing`. It answers `POST /v1/systemone` with the TypeSafe Jev wire protocol, with these differences:
+
+- Answers include `type`. They add `answer_confidence` and an `action` object, which the plugin drops. Noul answers also carry `confidence`, which the plugin drops (the System One noul contract has no confidence). The plugin still accepts answers without `type` when the question is declared.
+- Noul, score, and choice answers all pass plugin validation (score legend keys "0".."n-1" equal the criteria).
+- Choice allows up to 100 options on Laya. The plugin cap stays at 20.
+- Every score level needs a description. Plugin score criteria are always strings, so this holds.
+
+Laya binds 0.0.0.0 by default; start it with LAYA_HOST=127.0.0.1 to keep it on loopback.
+
+Example global configuration for Kev:
+
+```json
+{ "model": "kev-latest", "endpoint": "http://127.0.0.1:8009/v1/systemone" }
+```
+
+Example global configuration for Laya:
+
+```json
+{ "model": "english", "endpoint": "http://127.0.0.1:8000/v1/systemone" }
+```
+
+Local endpoint rules:
+
+- A local endpoint has hostname `localhost`, `127.x.x.x`, or `[::1]`. Only local endpoints may use plain `http:`. All others must use HTTPS.
+- Endpoint and model come only from trusted global configuration. Project configuration cannot set them.
+- A local endpoint does not need an API key, and the client sends no Authorization header without one. `TYPESAFE_API_KEY` is never sent to a local endpoint. If the local server sets `KEV_API_KEY` or `LAYA_API_KEY`, put that key in the global `apiKeyFile`.
+- State and questions stay on your machine and TypeSafe does not bill them. Hooks and `claude-jev ask` still send the same data to the local process.
+- `claude-jev status` shows `Endpoint: local` or `Endpoint: remote`, and says the key is not required for a local endpoint.
+
+There is no automatic fallback. The client sends the configured model once per attempt. The model-family check applies only to remote endpoints. A local server is run by the user and may report its own checkpoint name (Laya answers `english` requests as `laya-rl-agent`), so local responses are not rejected for a model mismatch. Remote endpoints fail with `MODEL_MISMATCH` on a cross-family answer. Family is the text before the first `-`. An `org/` prefix is ignored, so `jaredpalmer/kev-4b` and `kev-latest` are both family `kev`. Versioned IDs in the same family are accepted, so `jev-latest` may answer as `jev-1.13.0`.
+
+Probability maps must sum to one within `max(0.05, categories x 0.005)`. The client then renormalizes them.
+
+## Decision helper
+
+`claude-jev ask` sends custom typed questions about one state in a single TypeSafe request. It reads one JSON object from stdin and prints JSON:
+
+```bash
+claude-jev ask <<'JSON'
+{
+  "state": {"decision": "Use Redis or Postgres for jobs", "constraints": ["team of two"]},
+  "questions": {
+    "risky": {"type": "noul", "instructions": "Is job loss a serious risk?"},
+    "fit": {"type": "score", "instructions": "How well does Postgres fit?", "criteria": ["Poor", "Fair", "Good"]},
+    "pick": {"type": "choice", "instructions": "Which option fits best?", "criteria": {"redis": "Redis", "postgres": "Postgres"}}
+  }
+}
+JSON
+```
+
+Output has `model`, `usage` (token counts), and validated `answers`. The command accepts no arguments or flags.
+
+Limits:
+
+- input up to 64 KiB (UTF-8 bytes);
+- serialized `state` up to `maxStateChars` (default 8000);
+- 1 to 32 questions, named `^[A-Za-z][A-Za-z0-9_]{0,63}$`, excluding prototype names;
+- `instructions` up to 2000 characters and each criterion up to 500 characters;
+- Score takes 2 to 10 criteria. Choice takes 2 to 20 criteria. The TypeSafe API allows up to 255 options, but rounding drift grows by 0.005 per category, so the plugin caps Choice lower;
+- Noul `criteria` is optional and may only use the keys `true` and `false`.
+
+Exit codes:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | Success. |
+| `2` | Invalid input. No request was sent. |
+| `1` | TypeSafe or configuration error. |
+
+Errors report only a fixed category, code, HTTP status, and model. They never include response bodies, state, or question text.
+
+Skill `/claude-jev:decide` wraps this command for user-requested decisions. Only the user can invoke it. It asks follow-up questions, shows a summary of what will be sent, and waits for confirmation before every request. It reports uncertainty and gives Claude's own recommendation, labeled as advisory. TypeSafe output is evidence, not fact, consent, or authorization. The user makes the final decision. If the command exits nonzero, Claude continues with ordinary reasoning and does not retry with another model.
+
+State and questions go to the configured model's server. With a TypeSafe model they leave the machine and TypeSafe bills each request. With a local model they stay on the machine and are not billed by TypeSafe. Retries resend the full body, for up to 1 plus `retries` attempts within `timeoutMs`.
 
 ## Cache and session state
 
@@ -224,10 +328,7 @@ Plugin provides namespaced skill:
 
 ```text
 /claude-jev:jev
-/claude-jev:decide
 ```
-
-Use `/claude-jev:jev` for manual safety judgments. Use `/claude-jev:decide` when the user asks for help choosing or a consequential decision has meaningful uncertainty. The [decision skill](skills/decide/SKILL.md) asks for missing goals or constraints, then calls `claude-jev ask` with bounded custom questions.
 
 Automatic hooks do not depend on skill invocation. Main manual operation is:
 
@@ -235,9 +336,7 @@ Automatic hooks do not depend on skill invocation. Main manual operation is:
 claude-jev check "text or command to judge"
 ```
 
-`claude-jev ask` reads one JSON object from stdin with `state` and `questions` fields. It uses trusted user configuration and returns the resolved model, usage, and validated answers. The command accepts up to 32 questions, limits JSON input to 64 KiB, and applies configured `maxStateChars` to state (8,000 by default). The request sends state and questions to TypeSafe and may incur API cost. Do not send conversation history. Ask before including sensitive details.
-
-The result is advisory evidence, not fact, consent, or permission to use a tool. If TypeSafe fails or returns an invalid answer, `claude-jev ask` exits with an error; it does not fabricate an answer or switch models.
+Custom decision questions use `claude-jev ask` through `/claude-jev:decide`. See [Decision helper](#decision-helper).
 
 Inspection and advanced exact-session controls:
 
@@ -254,6 +353,8 @@ claude-jev output --session-id <id>
 Claude does not document session-ID environment variable for skill subprocesses. Exact controls require explicit hook session ID and, when applicable, `--scratchpad-dir`. They never edit persistent config.
 
 ## Test and validate
+
+The repository has no lockfile on purpose: Claude Code installs dependencies in installed plugin copies when a lockfile exists, and the only dependency is the exactly pinned TypeScript compiler used at build time.
 
 ```bash
 npm ci --ignore-scripts

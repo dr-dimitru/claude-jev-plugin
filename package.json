@@ -1,7 +1,7 @@
 {
   "name": "claude-jev",
-  "version": "0.1.1",
-  "description": "Semantic guardrails and output verification for Claude Code powered by TypeSafe Jev",
+  "version": "0.2.0",
+  "description": "Semantic guardrails, output checks, and an on-demand decision helper for Claude Code, powered by TypeSafe System One models (Jev by default)",
   "type": "module",
   "main": "dist/client.js",
   "types": "dist/client.d.ts",
@@ -14,11 +14,13 @@
     "dist",
     "hooks",
     "skills",
+    "docs/architecture.md",
     "docs/type-safe-integration.md",
     "docs/pre-tool-judgments.md",
     "docs/output-judgments.md",
     "docs/reliability-and-privacy.md",
     "docs/end-to-end-example.md",
+    "docs/local-models.md",
     "README.md",
     "LICENSE"
   ],
@@ -27,7 +29,8 @@
     "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run build && npm test",
-    "validate:plugin": "claude plugin validate . --strict"
+    "validate:plugin": "claude plugin validate . --strict",
+    "bench": "node bench/ask-bench.mjs"
   },
   "license": "BSD-3-Clause",
   "repository": {
@@ -40,13 +43,15 @@
     "plugin",
     "typesafe",
     "jev",
-    "guardrails"
+    "guardrails",
+    "decision-helper"
   ],
   "engines": {
     "node": ">=22.6"
   },
   "dependencies": {},
   "devDependencies": {
+    "@types/node": "22.20.4",
     "typescript": "5.9.2"
   }
 }

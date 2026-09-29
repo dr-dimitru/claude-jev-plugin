@@ -4,10 +4,14 @@
  * Captures bounded user prompt into session storage for use by subsequent PreToolUse gates.
  * Returns no stdout to Claude Code. Never fails with non-zero exit code.
  */
+import * as os from "node:os";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { sessionStore } from "../hook-io.js";
+import { hashSessionIdentity, resolveSessionBaseDir, sessionStore } from "../hook-io.js";
+import { resolveCacheBase } from "../cache.js";
+import { maybePruneSessionData } from "../retention.js";
 import { readHookPayload } from "./common.js";
-import { loadConfig } from "../config.js";
+import { canCallTypeSafe, loadConfig } from "../config.js";
 /**
  * Handles UserPromptSubmit payload.
  */
@@ -33,9 +37,24 @@ export async function runUserPrompt(payload) {
                 scratchpadDir,
             });
             const overrides = await store.getOverrides();
-            if (!(overrides.enabled ?? config.gate.enabled) || !config.apiKey)
-                return;
-            await store.setPrompt(prompt);
+            if ((overrides.enabled ?? config.gate.enabled) && canCallTypeSafe(config)) {
+                await store.setPrompt(prompt);
+            }
+            // Retention sweep runs regardless of gate state; throttled to once a day.
+            const roots = [
+                ...new Set([
+                    resolveSessionBaseDir({ scratchpadDir }),
+                    resolveCacheBase({ scratchpadDir }),
+                    // Legacy root: older versions stored state here even when
+                    // CLAUDE_PLUGIN_DATA was set. Data ages out via retention.
+                    path.join(process.env.HOME ?? os.homedir(), ".cache", "claude-jev"),
+                ]),
+            ];
+            await maybePruneSessionData({
+                roots,
+                retentionDays: config.retentionDays,
+                keepNames: [hashSessionIdentity(sessionId, agentId)],
+            });
         }
     }
     catch {
