@@ -60,6 +60,7 @@ Claude Code removes plugin data on uninstall unless `--keep-data` is passed. Leg
 - [Reliability, privacy, and trust boundaries](docs/reliability-and-privacy.md)
 - [End-to-end judgment example](docs/end-to-end-example.md)
 - [Architecture and design notes](docs/architecture.md)
+- [Run local models (Kev and Laya)](docs/local-models.md)
 
 ## How judgments work
 
@@ -225,7 +226,7 @@ Any non-empty model ID in global configuration is sent unchanged. The plugin ver
 
 ### Local alternative models
 
-Two open-weight models are documented as local alternatives. Neither is served by TypeSafe. Both are assumed to run on your machine. The plugin does not test them against a live server.
+Two open-weight models are documented as local alternatives. Neither is served by TypeSafe. Both are assumed to run on your machine. The plugin does not test them against a live server. For a step-by-step setup with helper scripts and a prompt for an AI agent, see [Run local System One models](docs/local-models.md).
 
 | Model | Source | Start command | Default bind | Endpoint |
 | --- | --- | --- | --- | --- |

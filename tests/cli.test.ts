@@ -1034,3 +1034,28 @@ describe("claude-jev CLI", { concurrency: false }, () => {
     });
   });
 });
+
+describe("local models guide", () => {
+  const guidePath = path.join(REPO_ROOT, "docs", "local-models.md");
+  const readText = (...parts: string[]) => fs.readFileSync(path.join(REPO_ROOT, ...parts), "utf8");
+
+  it("exists and is packaged", () => {
+    assert.ok(fs.existsSync(guidePath));
+    const pkg = JSON.parse(readText("package.json")) as { files: string[] };
+    assert.ok(pkg.files.includes("docs/local-models.md"));
+  });
+
+  it("is linked from the README", () => {
+    assert.match(readText("README.md"), /docs\/local-models\.md/);
+  });
+
+  it("has the pinned commits, loopback flags, and agent prompt", () => {
+    const guide = fs.readFileSync(guidePath, "utf8");
+    assert.ok(guide.includes("0c142becde423a0c68ec857f7831dac0315588a1"));
+    assert.ok(guide.includes("9d955671415fc19f069b9cc998928075c1f255ec"));
+    assert.ok(guide.includes("LAYA_HOST=127.0.0.1"));
+    assert.ok(guide.includes("--host 127.0.0.1"));
+    assert.match(guide, /^#+ .*prompt for an ai agent/im);
+    assert.ok(!guide.includes("\u2014"), "guide must not contain em dashes");
+  });
+});
