@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import {
   loadConfig,
+  canCallTypeSafe,
   DEFAULT_CONFIG,
   type LoadedConfig,
 } from "../src/config.ts";
@@ -143,6 +144,53 @@ describe("config loading", () => {
     // Default preserved
     assert.equal(config.maxStateChars, 8000);
     assert.equal(config.gate.blockOn.destructive, 0.9);
+  });
+
+  function writeCfg(dir: string, obj: unknown): void {
+    fs.mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, ".claude", "claude-jev.json"),
+      JSON.stringify(obj),
+      "utf-8"
+    );
+  }
+
+  it("retains a non-empty global model, trimmed", () => {
+    writeCfg(fakeHomeDir, { model: "jev-preview" });
+    assert.equal(
+      loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).model,
+      "jev-preview"
+    );
+
+    writeCfg(fakeHomeDir, { model: "  jev-preview  " });
+    assert.equal(
+      loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).model,
+      "jev-preview"
+    );
+  });
+
+  it("keeps the default model for empty or whitespace-only global model", () => {
+    for (const model of ["", "   "]) {
+      writeCfg(fakeHomeDir, { model });
+      assert.equal(
+        loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).model,
+        "jev-latest"
+      );
+    }
+  });
+
+  it("project model cannot replace the global model or the default", () => {
+    writeCfg(projectDir, { model: "jev-project" });
+    assert.equal(
+      loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).model,
+      "jev-latest"
+    );
+
+    writeCfg(fakeHomeDir, { model: "jev-preview" });
+    assert.equal(
+      loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).model,
+      "jev-preview"
+    );
   });
 
   it("ignores project-controlled secrets and transport settings", () => {
@@ -292,5 +340,50 @@ describe("config loading", () => {
     assert.equal(config.gate.argumentChars, 400);
     assert.equal(config.gate.blockOn.destructive, 0.9);
     assert.equal(config.output.minConfidence, 0.6);
+  });
+
+  describe("local endpoints", () => {
+    it("never uses TYPESAFE_API_KEY for a local endpoint", () => {
+      writeCfg(fakeHomeDir, { model: "kev-latest", endpoint: "http://127.0.0.1:8009/v1/systemone" });
+      const config = loadConfig(projectDir, {
+        homeDir: fakeHomeDir,
+        env: { TYPESAFE_API_KEY: "typesafe-secret" },
+      });
+      assert.equal(config.apiKey, undefined);
+      assert.equal(canCallTypeSafe(config), true);
+    });
+
+    it("uses a global apiKeyFile for a local server", () => {
+      fs.mkdirSync(path.join(fakeHomeDir, ".claude"), { recursive: true });
+      fs.writeFileSync(path.join(fakeHomeDir, ".claude", "kev.key"), "kev-secret\n");
+      writeCfg(fakeHomeDir, {
+        model: "kev-latest",
+        endpoint: "http://localhost:8009/v1/systemone",
+        apiKeyFile: "kev.key",
+      });
+      const config = loadConfig(projectDir, {
+        homeDir: fakeHomeDir,
+        env: { TYPESAFE_API_KEY: "typesafe-secret" },
+      });
+      assert.equal(config.apiKey, "kev-secret");
+    });
+
+    it("keeps requiring a key for remote endpoints", () => {
+      const config = loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} });
+      assert.equal(canCallTypeSafe(config), false);
+      const withKey = loadConfig(projectDir, {
+        homeDir: fakeHomeDir,
+        env: { TYPESAFE_API_KEY: "typesafe-secret" },
+      });
+      assert.equal(withKey.apiKey, "typesafe-secret");
+      assert.equal(canCallTypeSafe(withKey), true);
+    });
+
+    it("does not let project config point at a local endpoint", () => {
+      writeCfg(projectDir, { endpoint: "http://127.0.0.1:8009/v1/systemone" });
+      const config = loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} });
+      assert.equal(config.endpoint, "https://api.typesafe.ai/v1/systemone");
+      assert.equal(canCallTypeSafe(config), false);
+    });
   });
 });

@@ -5,7 +5,7 @@
  * - Validates hook payload
  * - Loads config and session overrides
  * - Skips disabled, non-Bash, and missing-key paths
- * - Calls askJev once with all four gate questions
+ * - Calls askTypeSafe once with all four gate questions
  * - Stores last gate verdict in sessionStore
  * - Clear verdicts return no stdout
  * - Shadow flagged verdicts return concise systemMessage

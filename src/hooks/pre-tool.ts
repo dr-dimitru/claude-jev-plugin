@@ -5,7 +5,7 @@
  * - Validates hook payload
  * - Loads config and session overrides
  * - Skips disabled, non-Bash, and missing-key paths
- * - Calls askJev once with all four gate questions
+ * - Calls askTypeSafe once with all four gate questions
  * - Stores last gate verdict in sessionStore
  * - Clear verdicts return no stdout
  * - Shadow flagged verdicts return concise systemMessage
@@ -15,11 +15,11 @@
 
 import { pathToFileURL } from "node:url";
 import { sessionStore } from "../hook-io.ts";
-import { loadConfig } from "../config.ts";
+import { canCallTypeSafe, loadConfig } from "../config.ts";
 import { buildGateState } from "../state.ts";
 import { GATE_QUESTIONS, evaluateGate, judgmentKey, type GateVerdict } from "../gate.ts";
 import { getOrCreateCached } from "../cache.ts";
-import { askJev } from "../client.ts";
+import { askTypeSafe } from "../client.ts";
 import { emitDiagnostic, normalizeToolName, readHookPayload, writeHookOutput } from "./common.ts";
 
 export interface HookSpecificOutput {
@@ -112,7 +112,7 @@ export async function runPreTool(
     }
 
     // 4. Missing API key check
-    if (!config.apiKey || config.apiKey.trim().length === 0) {
+    if (!canCallTypeSafe(config)) {
       return await emitDiagnostic<PreToolOutput>("MISSING_KEY", store);
     }
 
@@ -133,12 +133,12 @@ export async function runPreTool(
     });
     const ttlMs = (config.gate.cacheSeconds ?? 120) * 1000;
 
-    // 6. Call askJev / retrieve cached verdict
+    // 6. Call askTypeSafe / retrieve cached verdict
     const verdict = await getOrCreateCached<GateVerdict>(
       cacheKey,
       ttlMs,
       async () => {
-        const response = await askJev({
+        const response = await askTypeSafe({
           model: config.model,
           endpoint: config.endpoint,
           timeoutMs: config.timeoutMs,

@@ -7,7 +7,7 @@
 import { pathToFileURL } from "node:url";
 import { sessionStore } from "../hook-io.js";
 import { readHookPayload } from "./common.js";
-import { loadConfig } from "../config.js";
+import { canCallTypeSafe, loadConfig } from "../config.js";
 /**
  * Handles UserPromptSubmit payload.
  */
@@ -33,7 +33,7 @@ export async function runUserPrompt(payload) {
                 scratchpadDir,
             });
             const overrides = await store.getOverrides();
-            if (!(overrides.enabled ?? config.gate.enabled) || !config.apiKey)
+            if (!(overrides.enabled ?? config.gate.enabled) || !canCallTypeSafe(config))
                 return;
             await store.setPrompt(prompt);
         }

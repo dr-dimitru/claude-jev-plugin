@@ -8,7 +8,7 @@
 import { pathToFileURL } from "node:url";
 import { sessionStore } from "../hook-io.ts";
 import { readHookPayload } from "./common.ts";
-import { loadConfig } from "../config.ts";
+import { canCallTypeSafe, loadConfig } from "../config.ts";
 
 export interface UserPromptPayload {
   session_id?: string;
@@ -48,7 +48,7 @@ export async function runUserPrompt(payload?: unknown): Promise<void> {
         scratchpadDir,
       });
       const overrides = await store.getOverrides();
-      if (!(overrides.enabled ?? config.gate.enabled) || !config.apiKey) return;
+      if (!(overrides.enabled ?? config.gate.enabled) || !canCallTypeSafe(config)) return;
       await store.setPrompt(prompt);
     }
   } catch {

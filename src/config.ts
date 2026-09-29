@@ -9,8 +9,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import {
-  DEFAULT_MODEL,
+  DEFAULT_TYPESAFE_MODEL as DEFAULT_MODEL,
   DEFAULT_ENDPOINT,
+  isLocalEndpoint,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_RETRIES,
   registerApiKey,
@@ -273,6 +274,14 @@ function mergeConfigLayer(
  * Loads and validates configuration with standard precedence:
  * defaults -> ~/.claude/claude-jev.json -> <cwd>/.claude/claude-jev.json -> apiKeyFile -> env.TYPESAFE_API_KEY
  */
+/**
+ * Returns true when a TypeSafe call can be attempted: an API key is
+ * configured, or the endpoint is a local server that needs none.
+ */
+export function canCallTypeSafe(config: { apiKey?: string; endpoint?: string }): boolean {
+  return Boolean(config.apiKey?.trim()) || isLocalEndpoint(config.endpoint);
+}
+
 export function loadConfig(
   cwd: string = process.cwd(),
   options?: ConfigOptions
@@ -322,10 +331,15 @@ export function loadConfig(
     }
   }
 
-  // 4. Environment secret (TYPESAFE_API_KEY has highest precedence)
+  // 4. Environment secret (TYPESAFE_API_KEY has highest precedence). It is
+  // the TypeSafe key, so it is never used for a local endpoint; a local
+  // server's key comes only from the global apiKeyFile.
   const envKey = env.TYPESAFE_API_KEY?.trim();
   if (envKey && envKey.length > 0) {
-    config.apiKey = envKey;
+    registerApiKey(envKey);
+    if (!isLocalEndpoint(config.endpoint)) {
+      config.apiKey = envKey;
+    }
   }
 
   // 5. Register resolved apiKey for error redaction

@@ -17,12 +17,12 @@
 
 import * as crypto from "node:crypto";
 import {
-  askJev,
-  DEFAULT_MODEL,
-  type JevResponse,
-  type JevQuestion,
-  type JevNoulAnswer,
-  type JevChoiceAnswer,
+  askTypeSafe,
+  DEFAULT_TYPESAFE_MODEL,
+  type TypeSafeResponse,
+  type TypeSafeQuestion,
+  type TypeSafeNoulAnswer,
+  type TypeSafeChoiceAnswer,
 } from "./client.ts";
 import type { LoadedConfig, OutputConfig } from "./config.ts";
 import { buildOutputState, type OutputInput } from "./state.ts";
@@ -61,7 +61,7 @@ export const OUTPUT_QUESTIONS = {
       no_failure: "Output reports success or nothing wrong",
     },
   },
-} as const satisfies Record<string, JevQuestion>;
+} as const satisfies Record<string, TypeSafeQuestion>;
 
 // --- Advice Table ---
 
@@ -287,7 +287,7 @@ export function outputJudgmentKey(
 
   const canonical = canonicalize({
     state,
-    model: options?.model ?? DEFAULT_MODEL,
+    model: options?.model ?? DEFAULT_TYPESAFE_MODEL,
     questions: options?.questions ?? OUTPUT_QUESTIONS,
     thresholds: options?.thresholds ?? {
       leakThreshold: DEFAULT_LEAK_THRESHOLD,
@@ -334,7 +334,7 @@ export type EvaluateOutputConfig =
     };
 
 export function evaluateOutput(
-  response: JevResponse,
+  response: TypeSafeResponse,
   config?: EvaluateOutputConfig
 ): OutputVerdict {
   const cfg = config as Record<string, unknown> | undefined;
@@ -354,8 +354,8 @@ export function evaluateOutput(
       ? cfg.minConfidence
       : DEFAULT_CLASS_MIN_CONFIDENCE;
 
-  const leaksAnswer = response.answers?.leaks_secret as JevNoulAnswer | undefined;
-  const failureAnswer = response.answers?.failure_class as JevChoiceAnswer | undefined;
+  const leaksAnswer = response.answers?.leaks_secret as TypeSafeNoulAnswer | undefined;
+  const failureAnswer = response.answers?.failure_class as TypeSafeChoiceAnswer | undefined;
 
   const leakScore =
     typeof leaksAnswer?.noul === "number" ? leaksAnswer.noul : 0;
@@ -402,7 +402,7 @@ export function evaluateOutput(
 export interface JudgeOutputOptions {
   config?: LoadedConfig | EvaluateOutputConfig;
   sessionStore?: SessionStore;
-  askJevFn?: typeof askJev;
+  askJevFn?: typeof askTypeSafe;
   signal?: AbortSignal;
 }
 
@@ -424,7 +424,7 @@ export async function judgeOutput(
     claimedToolUseId = normalized.toolUseId;
   }
 
-  const askFn = options?.askJevFn ?? askJev;
+  const askFn = options?.askJevFn ?? askTypeSafe;
   const config = options?.config as LoadedConfig | undefined;
 
   // Build bounded output state via src/state.ts
@@ -443,10 +443,10 @@ export async function judgeOutput(
       : undefined,
   });
 
-  let response: JevResponse;
+  let response: TypeSafeResponse;
   try {
     response = await askFn({
-      model: config?.model ?? DEFAULT_MODEL,
+      model: config?.model ?? DEFAULT_TYPESAFE_MODEL,
       state: boundedState,
       questions: OUTPUT_QUESTIONS,
       apiKey: config?.apiKey,

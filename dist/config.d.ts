@@ -50,4 +50,12 @@ export declare const DEFAULT_CONFIG: LoadedConfig;
  * Loads and validates configuration with standard precedence:
  * defaults -> ~/.claude/claude-jev.json -> <cwd>/.claude/claude-jev.json -> apiKeyFile -> env.TYPESAFE_API_KEY
  */
+/**
+ * Returns true when a TypeSafe call can be attempted: an API key is
+ * configured, or the endpoint is a local server that needs none.
+ */
+export declare function canCallTypeSafe(config: {
+    apiKey?: string;
+    endpoint?: string;
+}): boolean;
 export declare function loadConfig(cwd?: string, options?: ConfigOptions): LoadedConfig;

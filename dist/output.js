@@ -15,7 +15,7 @@
  * Leak and advice notices must never include output text or detected values.
  */
 import * as crypto from "node:crypto";
-import { askJev, DEFAULT_MODEL, } from "./client.js";
+import { askTypeSafe, DEFAULT_TYPESAFE_MODEL, } from "./client.js";
 import { buildOutputState } from "./state.js";
 export const DEFAULT_LEAK_THRESHOLD = 0.90;
 export const DEFAULT_CLASS_MIN_CONFIDENCE = 0.60;
@@ -189,7 +189,7 @@ export function outputJudgmentKey(input, options) {
     }
     const canonical = canonicalize({
         state,
-        model: options?.model ?? DEFAULT_MODEL,
+        model: options?.model ?? DEFAULT_TYPESAFE_MODEL,
         questions: options?.questions ?? OUTPUT_QUESTIONS,
         thresholds: options?.thresholds ?? {
             leakThreshold: DEFAULT_LEAK_THRESHOLD,
@@ -261,7 +261,7 @@ export async function judgeOutput(payload, options) {
         }
         claimedToolUseId = normalized.toolUseId;
     }
-    const askFn = options?.askJevFn ?? askJev;
+    const askFn = options?.askJevFn ?? askTypeSafe;
     const config = options?.config;
     // Build bounded output state via src/state.ts
     const boundedState = buildOutputState({
@@ -281,7 +281,7 @@ export async function judgeOutput(payload, options) {
     let response;
     try {
         response = await askFn({
-            model: config?.model ?? DEFAULT_MODEL,
+            model: config?.model ?? DEFAULT_TYPESAFE_MODEL,
             state: boundedState,
             questions: OUTPUT_QUESTIONS,
             apiKey: config?.apiKey,
