@@ -199,9 +199,7 @@ The client makes no model fallback. The model-family check applies only to remot
 flowchart TD
     A{scratchpad_dir available?}
     A -->|yes| S[Claude session scratchpad]
-    A -->|no| B{CLAUDE_PLUGIN_DATA set?}
-    B -->|yes| P[CLAUDE_PLUGIN_DATA/sessions]
-    B -->|no| F[~/.cache/claude-jev]
+    A -->|no| F[~/.cache/claude-jev]
 ```
 
 **ASCII version**
@@ -213,19 +211,15 @@ flowchart TD
           |
          no
           v
-[CLAUDE_PLUGIN_DATA set?]
-          | yes
-          +--------------------> [CLAUDE_PLUGIN_DATA/sessions]
-          |
-         no
-          v
 [~/.cache/claude-jev]
 ```
 
 
 State contains bounded prompt, session overrides, latest verdict summaries, seen tool IDs, and diagnostic timestamps. Session filenames hash session and optional agent identities. Files use restrictive permissions and locked atomic updates.
 
-Session state and judgment caches share one root. With a scratchpad, state is `<scratchpad>/<hash>.json` and caches are `<scratchpad>/cache/<hash>`. With `CLAUDE_PLUGIN_DATA`, state is `$CLAUDE_PLUGIN_DATA/sessions` and caches are `$CLAUDE_PLUGIN_DATA/cache`. Otherwise both use `~/.cache/claude-jev`. Older versions kept caches in `~/.cache/claude-jev/cache` even when plugin data existed. The retention sweep also prunes that legacy tree, so it ages out after `retentionDays`.
+With a scratchpad, state is `<scratchpad>/<hash>.json` and caches are `<scratchpad>/cache/<hash>`. Otherwise state is in `~/.cache/claude-jev`. Session state never uses `CLAUDE_PLUGIN_DATA`: Claude Code sets it for hooks but not for the Bash tool, so `claude-jev status`, `last`, `enable`, `disable`, and `mode` would read a different directory than the hooks. Judgment caches are hook-only, so they use `$CLAUDE_PLUGIN_DATA/cache` when it is set and `~/.cache/claude-jev/cache` otherwise.
+
+Earlier versions kept caches in `~/.cache/claude-jev/cache` even when plugin data existed, and versions before 0.2.1 kept session state in `$CLAUDE_PLUGIN_DATA/sessions`. The retention sweep also prunes both legacy locations, so they age out after `retentionDays`.
 
 Scratchpad lifetime is managed by Claude Code. Plugin data persists through updates and is removed by uninstall unless `--keep-data` is used. Retention. Session state files and per-session cache directories older than `retentionDays` (default 7, global configuration only, `0` disables) are deleted by `UserPromptSubmit`, at most once per day. A marker file `.last-prune` in the first existing state directory throttles the sweep. The sweep skips the current session, deletes at most 500 items per run, never follows symlinks, and touches only files named by the plugin's hash patterns. It fails open.
 

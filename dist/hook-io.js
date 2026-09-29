@@ -84,9 +84,8 @@ export function resolveSessionBaseDir(options) {
     if (options.scratchpadDir && options.scratchpadDir.trim().length > 0) {
         return path.resolve(options.scratchpadDir.trim());
     }
-    if (env.CLAUDE_PLUGIN_DATA?.trim()) {
-        return path.join(path.resolve(env.CLAUDE_PLUGIN_DATA.trim()), "sessions");
-    }
+    // Not CLAUDE_PLUGIN_DATA: hooks receive it, but the CLI run from Claude's
+    // Bash tool does not, and both must read the same overrides and verdicts.
     const userHome = options.homeDir ?? env.HOME ?? os.homedir();
     return path.join(userHome, ".cache", "claude-jev");
 }

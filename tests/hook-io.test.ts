@@ -126,7 +126,8 @@ describe("hook-io", () => {
       assert.ok(sessionPath.startsWith(path.resolve(expectedCacheDir)));
     });
 
-    it("uses CLAUDE_PLUGIN_DATA before the home cache fallback", () => {
+    it("ignores CLAUDE_PLUGIN_DATA so the CLI and hooks share one state root", () => {
+      // Hooks get CLAUDE_PLUGIN_DATA; Claude's Bash tool, which runs the CLI, does not.
       const pluginDataDir = path.join(tempDir, "plugin-data");
       const store = sessionStore({
         sessionId: "plugin-data",
@@ -135,7 +136,7 @@ describe("hook-io", () => {
       });
       assert.ok(
         store.getSessionPath().startsWith(
-          path.join(path.resolve(pluginDataDir), "sessions") + path.sep
+          path.resolve(fakeHomeDir, ".cache", "claude-jev") + path.sep
         )
       );
     });
