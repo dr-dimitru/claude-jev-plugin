@@ -4,3 +4,6 @@ coverage/
 .superpowers/
 
 .worktrees/
+
+# No lockfile: Claude Code runs npm ci in installed plugin copies when one exists, which would install devDependencies.
+package-lock.json

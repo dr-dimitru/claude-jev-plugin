@@ -1,7 +1,7 @@
 {
   "name": "claude-jev",
-  "version": "0.1.1",
-  "description": "Semantic guardrails and output verification for Claude Code powered by TypeSafe Jev",
+  "version": "0.2.0",
+  "description": "Semantic guardrails, output checks, and an on-demand decision helper for Claude Code, powered by TypeSafe System One models (Jev by default)",
   "type": "module",
   "main": "dist/client.js",
   "types": "dist/client.d.ts",
@@ -42,7 +42,8 @@
     "plugin",
     "typesafe",
     "jev",
-    "guardrails"
+    "guardrails",
+    "decision-helper"
   ],
   "engines": {
     "node": ">=22.6"
