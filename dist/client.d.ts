@@ -1,10 +1,12 @@
 /**
- * TypeSafe Jev client for claude-jev.
+ * TypeSafe System One client for claude-jev.
  *
  * Directly posts typed questions to TypeSafe System One API over HTTPS.
  * Pure TypeScript implementation using Node built-in fetch and AbortController.
  */
-export declare const DEFAULT_MODEL = "jev-latest";
+export declare const DEFAULT_TYPESAFE_MODEL = "jev-latest";
+/** @deprecated Use DEFAULT_TYPESAFE_MODEL. */
+export { DEFAULT_TYPESAFE_MODEL as DEFAULT_MODEL };
 export declare const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export declare const DEFAULT_TIMEOUT_MS = 15000;
 export declare const DEFAULT_RETRIES = 2;
@@ -24,7 +26,7 @@ export declare function redact(text: string): string;
  * Bounds text to a maximum character count, appending the marker …[N chars elided] if truncated.
  */
 export declare function boundText(text: string, maxChars?: number): string;
-export interface JevNoulQuestion {
+export interface TypeSafeNoulQuestion {
     type: "noul";
     instructions: string;
     criteria?: {
@@ -34,52 +36,52 @@ export interface JevNoulQuestion {
     };
     [key: string]: unknown;
 }
-export interface JevScoreQuestion {
+export interface TypeSafeScoreQuestion {
     type: "score";
     instructions: string;
     criteria: string[];
     [key: string]: unknown;
 }
-export interface JevChoiceQuestion {
+export interface TypeSafeChoiceQuestion {
     type: "choice";
     instructions: string;
     criteria: Record<string, string | null>;
     [key: string]: unknown;
 }
-export type JevQuestion = JevNoulQuestion | JevScoreQuestion | JevChoiceQuestion;
-export interface JevNoulAnswer {
+export type TypeSafeQuestion = TypeSafeNoulQuestion | TypeSafeScoreQuestion | TypeSafeChoiceQuestion;
+export interface TypeSafeNoulAnswer {
     type: "noul";
     noul: number;
 }
-export interface JevChoiceAnswer {
+export interface TypeSafeChoiceAnswer {
     type: "choice";
     choice: string;
     probabilities: Record<string, number>;
     confidence: number;
 }
-export interface JevScoreAnswer {
+export interface TypeSafeScoreAnswer {
     type: "score";
     score: number;
     legend: Record<string, string>;
     probabilities: Record<string, number>;
     confidence: number;
 }
-export type JevAnswer = JevNoulAnswer | JevChoiceAnswer | JevScoreAnswer;
-export interface JevUsage {
+export type TypeSafeAnswer = TypeSafeNoulAnswer | TypeSafeChoiceAnswer | TypeSafeScoreAnswer;
+export interface TypeSafeUsage {
     input_tokens: number;
     output_tokens: number;
     [key: string]: unknown;
 }
-export interface JevResponse {
+export interface TypeSafeResponse {
     model?: string;
-    answers: Record<string, JevAnswer>;
-    usage?: JevUsage;
+    answers: Record<string, TypeSafeAnswer>;
+    usage?: TypeSafeUsage;
     [key: string]: unknown;
 }
-export interface JevCall {
+export interface TypeSafeCall {
     model?: string;
     state: unknown;
-    questions: Record<string, JevQuestion>;
+    questions: Record<string, TypeSafeQuestion>;
     apiKey?: string;
     endpoint?: string;
     timeoutMs?: number;
@@ -88,7 +90,29 @@ export interface JevCall {
     signal?: AbortSignal;
     fetch?: typeof fetch;
 }
-export declare class JevError extends Error {
+/** @deprecated Use TypeSafeNoulQuestion. */
+export type JevNoulQuestion = TypeSafeNoulQuestion;
+/** @deprecated Use TypeSafeScoreQuestion. */
+export type JevScoreQuestion = TypeSafeScoreQuestion;
+/** @deprecated Use TypeSafeChoiceQuestion. */
+export type JevChoiceQuestion = TypeSafeChoiceQuestion;
+/** @deprecated Use TypeSafeQuestion. */
+export type JevQuestion = TypeSafeQuestion;
+/** @deprecated Use TypeSafeNoulAnswer. */
+export type JevNoulAnswer = TypeSafeNoulAnswer;
+/** @deprecated Use TypeSafeScoreAnswer. */
+export type JevScoreAnswer = TypeSafeScoreAnswer;
+/** @deprecated Use TypeSafeChoiceAnswer. */
+export type JevChoiceAnswer = TypeSafeChoiceAnswer;
+/** @deprecated Use TypeSafeAnswer. */
+export type JevAnswer = TypeSafeAnswer;
+/** @deprecated Use TypeSafeUsage. */
+export type JevUsage = TypeSafeUsage;
+/** @deprecated Use TypeSafeResponse. */
+export type JevResponse = TypeSafeResponse;
+/** @deprecated Use TypeSafeCall. */
+export type JevCall = TypeSafeCall;
+export declare class TypeSafeError extends Error {
     readonly status?: number;
     readonly retryable: boolean;
     readonly code?: string;
@@ -99,6 +123,8 @@ export declare class JevError extends Error {
         cause?: unknown;
     });
 }
+/** @deprecated Use TypeSafeError. */
+export { TypeSafeError as JevError };
 /**
  * Returns true if an HTTP status code represents a retryable transient failure (429, 529, 5xx).
  */
@@ -109,11 +135,15 @@ export declare function isRetryableStatus(status: number): boolean;
 export declare function validateEndpoint(endpoint: string): string;
 export declare const PROBABILITY_SUM_TOLERANCE = 0.05;
 /**
- * Strictly validates the wire response shape from TypeSafe Jev.
+ * Strictly validates the wire response shape from TypeSafe System One.
  */
-export declare function validateJevResponse(raw: unknown, expectedQuestions?: Record<string, JevQuestion>): JevResponse;
+export declare function validateTypeSafeResponse(raw: unknown, expectedQuestions?: Record<string, TypeSafeQuestion>): TypeSafeResponse;
+/** @deprecated Use validateTypeSafeResponse. */
+export { validateTypeSafeResponse as validateJevResponse };
 export declare function parseRetryAfter(value: string | null | undefined, now?: number): number | undefined;
 /**
  * Directly posts a request to TypeSafe System One and returns the validated response.
  */
-export declare function askJev(call: JevCall): Promise<JevResponse>;
+export declare function askTypeSafe(call: TypeSafeCall): Promise<TypeSafeResponse>;
+/** @deprecated Use askTypeSafe. */
+export { askTypeSafe as askJev };

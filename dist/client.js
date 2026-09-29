@@ -1,10 +1,12 @@
 /**
- * TypeSafe Jev client for claude-jev.
+ * TypeSafe System One client for claude-jev.
  *
  * Directly posts typed questions to TypeSafe System One API over HTTPS.
  * Pure TypeScript implementation using Node built-in fetch and AbortController.
  */
-export const DEFAULT_MODEL = "jev-latest";
+export const DEFAULT_TYPESAFE_MODEL = "jev-latest";
+/** @deprecated Use DEFAULT_TYPESAFE_MODEL. */
+export { DEFAULT_TYPESAFE_MODEL as DEFAULT_MODEL };
 export const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const DEFAULT_TIMEOUT_MS = 15000;
 export const DEFAULT_RETRIES = 2;
@@ -57,22 +59,24 @@ export function boundText(text, maxChars = 500) {
     return text.slice(0, maxChars) + `…[${elided} chars elided]`;
 }
 // --- Error Handling ---
-export class JevError extends Error {
+export class TypeSafeError extends Error {
     status;
     retryable;
     code;
     constructor(message, options) {
         super(redact(message));
-        this.name = "JevError";
+        this.name = "TypeSafeError";
         this.status = options?.status;
         this.retryable = options?.retryable ?? false;
         this.code = options?.code;
         if (options?.cause !== undefined) {
             this.cause = options.cause;
         }
-        Object.setPrototypeOf(this, JevError.prototype);
+        Object.setPrototypeOf(this, TypeSafeError.prototype);
     }
 }
+/** @deprecated Use TypeSafeError. */
+export { TypeSafeError as JevError };
 /**
  * Returns true if an HTTP status code represents a retryable transient failure (429, 529, 5xx).
  */
@@ -88,13 +92,13 @@ export function validateEndpoint(endpoint) {
         parsed = new URL(endpoint);
     }
     catch {
-        throw new JevError("Invalid TypeSafe endpoint URL", {
+        throw new TypeSafeError("Invalid TypeSafe endpoint URL", {
             code: "INVALID_ENDPOINT",
             retryable: false,
         });
     }
     if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
-        throw new JevError("TypeSafe endpoint must use HTTPS without embedded credentials", { code: "INVALID_ENDPOINT", retryable: false });
+        throw new TypeSafeError("TypeSafe endpoint must use HTTPS without embedded credentials", { code: "INVALID_ENDPOINT", retryable: false });
     }
     return parsed.href;
 }
@@ -102,7 +106,7 @@ export function validateEndpoint(endpoint) {
 export const PROBABILITY_SUM_TOLERANCE = 0.05;
 function validateProbabilities(probs, qName, expectedKeys) {
     if (!probs || typeof probs !== "object" || Array.isArray(probs)) {
-        throw new JevError(`Malformed answer for question '${qName}': probabilities must be an object`, { code: "MALFORMED_RESPONSE", retryable: false });
+        throw new TypeSafeError(`Malformed answer for question '${qName}': probabilities must be an object`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     const obj = probs;
     const keys = Object.keys(obj);
@@ -111,12 +115,12 @@ function validateProbabilities(probs, qName, expectedKeys) {
     if (keys.length === 0 ||
         actual.length !== expected.length ||
         actual.some((key, index) => key !== expected[index])) {
-        throw new JevError(`Malformed answer for question '${qName}': probability keys must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
+        throw new TypeSafeError(`Malformed answer for question '${qName}': probability keys must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     let total = 0;
     for (const [k, v] of Object.entries(obj)) {
         if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) {
-            throw new JevError(`Malformed answer for question '${qName}': probability for '${k}' must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': probability for '${k}' must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         total += v;
     }
@@ -124,7 +128,7 @@ function validateProbabilities(probs, qName, expectedKeys) {
     // distribution legitimately sums to 0.97..1.03. Accept that drift and
     // renormalize; anything wider is a malformed distribution.
     if (Math.abs(total - 1) > PROBABILITY_SUM_TOLERANCE) {
-        throw new JevError(`Malformed answer for question '${qName}': probabilities must sum to 1`, { code: "MALFORMED_RESPONSE", retryable: false });
+        throw new TypeSafeError(`Malformed answer for question '${qName}': probabilities must sum to 1`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     if (total === 1)
         return obj;
@@ -136,22 +140,22 @@ function validateProbabilities(probs, qName, expectedKeys) {
 }
 function validateAnswer(rawAnswer, qName, expectedQuestion) {
     if (!rawAnswer || typeof rawAnswer !== "object" || Array.isArray(rawAnswer)) {
-        throw new JevError(`Malformed answer for question '${qName}': expected object`, { code: "MALFORMED_RESPONSE", retryable: false });
+        throw new TypeSafeError(`Malformed answer for question '${qName}': expected object`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     const ans = rawAnswer;
     const ansType = ans.type;
     if (typeof ansType !== "string") {
-        throw new JevError(`Malformed answer for question '${qName}': missing answer type`, { code: "MALFORMED_RESPONSE", retryable: false });
+        throw new TypeSafeError(`Malformed answer for question '${qName}': missing answer type`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     if (expectedQuestion !== undefined && ansType !== expectedQuestion.type) {
-        throw new JevError(`Malformed answer for question '${qName}': answer type '${ansType}' does not match question type '${expectedQuestion.type}'`, { code: "MALFORMED_RESPONSE", retryable: false });
+        throw new TypeSafeError(`Malformed answer for question '${qName}': answer type '${ansType}' does not match question type '${expectedQuestion.type}'`, { code: "MALFORMED_RESPONSE", retryable: false });
     }
     if (ansType === "noul") {
         if (typeof ans.noul !== "number" ||
             !Number.isFinite(ans.noul) ||
             ans.noul < 0 ||
             ans.noul > 1) {
-            throw new JevError(`Malformed answer for question '${qName}': noul must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': noul must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         return {
             type: "noul",
@@ -160,20 +164,20 @@ function validateAnswer(rawAnswer, qName, expectedQuestion) {
     }
     if (ansType === "choice") {
         if (typeof ans.choice !== "string") {
-            throw new JevError(`Malformed answer for question '${qName}': choice must be a string`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': choice must be a string`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         const expectedKeys = expectedQuestion?.type === "choice"
             ? Object.keys(expectedQuestion.criteria)
             : Object.keys(ans.probabilities ?? {});
         if (!expectedKeys.includes(ans.choice)) {
-            throw new JevError(`Malformed answer for question '${qName}': choice must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': choice must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         const probs = validateProbabilities(ans.probabilities, qName, expectedKeys);
         if (typeof ans.confidence !== "number" ||
             !Number.isFinite(ans.confidence) ||
             ans.confidence < 0 ||
             ans.confidence > 1) {
-            throw new JevError(`Malformed answer for question '${qName}': confidence must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': confidence must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         return {
             type: "choice",
@@ -184,15 +188,15 @@ function validateAnswer(rawAnswer, qName, expectedQuestion) {
     }
     if (ansType === "score") {
         if (typeof ans.score !== "number" || !Number.isFinite(ans.score)) {
-            throw new JevError(`Malformed answer for question '${qName}': score must be a finite number`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': score must be a finite number`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         if (!ans.legend || typeof ans.legend !== "object" || Array.isArray(ans.legend)) {
-            throw new JevError(`Malformed answer for question '${qName}': legend must be an object`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': legend must be an object`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         const legendObj = ans.legend;
         for (const [k, v] of Object.entries(legendObj)) {
             if (typeof v !== "string") {
-                throw new JevError(`Malformed answer for question '${qName}': legend value for '${k}' must be a string`, { code: "MALFORMED_RESPONSE", retryable: false });
+                throw new TypeSafeError(`Malformed answer for question '${qName}': legend value for '${k}' must be a string`, { code: "MALFORMED_RESPONSE", retryable: false });
             }
         }
         const expectedCriteria = expectedQuestion?.type === "score"
@@ -203,14 +207,14 @@ function validateAnswer(rawAnswer, qName, expectedQuestion) {
             ans.score > expectedCriteria.length - 1 ||
             Object.keys(legendObj).length !== expectedKeys.length ||
             expectedKeys.some((key, index) => legendObj[key] !== expectedCriteria[index])) {
-            throw new JevError(`Malformed answer for question '${qName}': score legend must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': score legend must match declared criteria`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         const probs = validateProbabilities(ans.probabilities, qName, expectedKeys);
         if (typeof ans.confidence !== "number" ||
             !Number.isFinite(ans.confidence) ||
             ans.confidence < 0 ||
             ans.confidence > 1) {
-            throw new JevError(`Malformed answer for question '${qName}': confidence must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError(`Malformed answer for question '${qName}': confidence must be a finite number between 0 and 1`, { code: "MALFORMED_RESPONSE", retryable: false });
         }
         return {
             type: "score",
@@ -220,14 +224,14 @@ function validateAnswer(rawAnswer, qName, expectedQuestion) {
             confidence: ans.confidence,
         };
     }
-    throw new JevError(`Malformed answer for question '${qName}': unknown answer type '${ansType}'`, { code: "MALFORMED_RESPONSE", retryable: false });
+    throw new TypeSafeError(`Malformed answer for question '${qName}': unknown answer type '${ansType}'`, { code: "MALFORMED_RESPONSE", retryable: false });
 }
 /**
- * Strictly validates the wire response shape from TypeSafe Jev.
+ * Strictly validates the wire response shape from TypeSafe System One.
  */
-export function validateJevResponse(raw, expectedQuestions) {
+export function validateTypeSafeResponse(raw, expectedQuestions) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-        throw new JevError("Malformed response: expected JSON object", {
+        throw new TypeSafeError("Malformed response: expected JSON object", {
             code: "MALFORMED_RESPONSE",
             retryable: false,
         });
@@ -235,7 +239,7 @@ export function validateJevResponse(raw, expectedQuestions) {
     const rawObj = raw;
     const rawAnswers = rawObj.answers;
     if (!rawAnswers || typeof rawAnswers !== "object" || Array.isArray(rawAnswers)) {
-        throw new JevError("Malformed response: missing answers object", {
+        throw new TypeSafeError("Malformed response: missing answers object", {
             code: "MALFORMED_RESPONSE",
             retryable: false,
         });
@@ -245,7 +249,7 @@ export function validateJevResponse(raw, expectedQuestions) {
     if (expectedQuestions) {
         for (const [qName, qDef] of Object.entries(expectedQuestions)) {
             if (!(qName in answersObj)) {
-                throw new JevError(`Malformed response: missing answer for question '${qName}'`, { code: "MALFORMED_RESPONSE", retryable: false });
+                throw new TypeSafeError(`Malformed response: missing answer for question '${qName}'`, { code: "MALFORMED_RESPONSE", retryable: false });
             }
             validatedAnswers[qName] = validateAnswer(answersObj[qName], qName, qDef);
         }
@@ -256,7 +260,7 @@ export function validateJevResponse(raw, expectedQuestions) {
         }
     }
     if (typeof rawObj.model !== "string" || rawObj.model.trim().length === 0) {
-        throw new JevError("Malformed response: model must be a non-empty string", {
+        throw new TypeSafeError("Malformed response: model must be a non-empty string", {
             code: "MALFORMED_RESPONSE",
             retryable: false,
         });
@@ -264,7 +268,7 @@ export function validateJevResponse(raw, expectedQuestions) {
     let validatedUsage;
     if (rawObj.usage !== undefined) {
         if (!rawObj.usage || typeof rawObj.usage !== "object" || Array.isArray(rawObj.usage)) {
-            throw new JevError("Malformed response: usage must be an object", {
+            throw new TypeSafeError("Malformed response: usage must be an object", {
                 code: "MALFORMED_RESPONSE",
                 retryable: false,
             });
@@ -274,7 +278,7 @@ export function validateJevResponse(raw, expectedQuestions) {
             !Number.isFinite(u.input_tokens) ||
             typeof u.output_tokens !== "number" ||
             !Number.isFinite(u.output_tokens)) {
-            throw new JevError("Malformed response: usage input_tokens and output_tokens must be finite numbers", { code: "MALFORMED_RESPONSE", retryable: false });
+            throw new TypeSafeError("Malformed response: usage input_tokens and output_tokens must be finite numbers", { code: "MALFORMED_RESPONSE", retryable: false });
         }
         validatedUsage = {
             input_tokens: u.input_tokens,
@@ -283,7 +287,7 @@ export function validateJevResponse(raw, expectedQuestions) {
         };
     }
     else {
-        throw new JevError("Malformed response: missing usage object", {
+        throw new TypeSafeError("Malformed response: missing usage object", {
             code: "MALFORMED_RESPONSE",
             retryable: false,
         });
@@ -297,6 +301,8 @@ export function validateJevResponse(raw, expectedQuestions) {
     }
     return result;
 }
+/** @deprecated Use validateTypeSafeResponse. */
+export { validateTypeSafeResponse as validateJevResponse };
 export function parseRetryAfter(value, now = Date.now()) {
     if (!value)
         return undefined;
@@ -328,11 +334,11 @@ function sleep(ms, signal) {
         signal?.addEventListener("abort", onAbort, { once: true });
     });
 }
-// --- Direct Jev Invocation ---
+// --- Direct TypeSafe Invocation ---
 /**
  * Directly posts a request to TypeSafe System One and returns the validated response.
  */
-export async function askJev(call) {
+export async function askTypeSafe(call) {
     if (call.apiKey)
         registerApiKey(call.apiKey);
     const envKey = process.env.TYPESAFE_API_KEY?.trim();
@@ -340,9 +346,9 @@ export async function askJev(call) {
         registerApiKey(envKey);
     const apiKey = call.apiKey?.trim() || envKey;
     if (!apiKey) {
-        throw new JevError("Missing TypeSafe API key. Set TYPESAFE_API_KEY or provide apiKey in JevCall.", { code: "MISSING_KEY", retryable: false });
+        throw new TypeSafeError("Missing TypeSafe API key. Set TYPESAFE_API_KEY or provide apiKey in TypeSafeCall.", { code: "MISSING_KEY", retryable: false });
     }
-    const model = call.model ?? DEFAULT_MODEL;
+    const model = call.model ?? DEFAULT_TYPESAFE_MODEL;
     const endpoint = validateEndpoint(call.endpoint ?? DEFAULT_ENDPOINT);
     const timeoutMs = call.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const retries = call.retries ?? DEFAULT_RETRIES;
@@ -358,7 +364,7 @@ export async function askJev(call) {
     if (call.signal) {
         if (call.signal.aborted) {
             clearTimeout(timeoutId);
-            throw new JevError("Request aborted by caller", {
+            throw new TypeSafeError("Request aborted by caller", {
                 code: "ABORTED",
                 retryable: false,
                 cause: call.signal.reason,
@@ -373,13 +379,13 @@ export async function askJev(call) {
     });
     const abortError = () => {
         if (call.signal?.aborted) {
-            return new JevError("Request aborted by caller", {
+            return new TypeSafeError("Request aborted by caller", {
                 code: "ABORTED",
                 retryable: false,
                 cause: call.signal.reason,
             });
         }
-        return new JevError(`Request timed out after ${timeoutMs}ms`, {
+        return new TypeSafeError(`Request timed out after ${timeoutMs}ms`, {
             code: "TIMEOUT",
             retryable: true,
             cause: controller.signal.reason,
@@ -417,9 +423,9 @@ export async function askJev(call) {
                     catch (parseErr) {
                         if (controller.signal.aborted)
                             throw abortError();
-                        throw new JevError(`Malformed JSON response from TypeSafe API: ${parseErr.message}`, { code: "MALFORMED_JSON", retryable: false, cause: parseErr });
+                        throw new TypeSafeError(`Malformed JSON response from TypeSafe API: ${parseErr.message}`, { code: "MALFORMED_JSON", retryable: false, cause: parseErr });
                     }
-                    return validateJevResponse(json, call.questions);
+                    return validateTypeSafeResponse(json, call.questions);
                 }
                 const status = res.status;
                 const retryable = isRetryableStatus(status);
@@ -440,13 +446,13 @@ export async function askJev(call) {
                         await sleep(delay, controller.signal);
                     continue;
                 }
-                throw new JevError(`TypeSafe API error (HTTP ${status}): ${boundedBody || res.statusText || "Unknown error"}`, { status, retryable, code: `HTTP_${status}` });
+                throw new TypeSafeError(`TypeSafe API error (HTTP ${status}): ${boundedBody || res.statusText || "Unknown error"}`, { status, retryable, code: `HTTP_${status}` });
             }
             catch (err) {
                 if (controller.signal.aborted || timedOut || Date.now() >= deadline) {
                     throw abortError();
                 }
-                if (err instanceof JevError)
+                if (err instanceof TypeSafeError)
                     throw err;
                 const name = err?.name;
                 const isNetwork = name === "AbortError" || name === "TimeoutError" || name === "TypeError";
@@ -461,14 +467,14 @@ export async function askJev(call) {
                         await sleep(delay, controller.signal);
                     continue;
                 }
-                throw new JevError(`Network error: ${err.message}`, {
+                throw new TypeSafeError(`Network error: ${err.message}`, {
                     code: "NETWORK_ERROR",
                     retryable: true,
                     cause: err,
                 });
             }
         }
-        throw new JevError("Request failed: maximum retries exhausted", {
+        throw new TypeSafeError("Request failed: maximum retries exhausted", {
             code: "RETRIES_EXHAUSTED",
             retryable: true,
         });
@@ -478,3 +484,5 @@ export async function askJev(call) {
         call.signal?.removeEventListener("abort", onCallerAbort);
     }
 }
+/** @deprecated Use askTypeSafe. */
+export { askTypeSafe as askJev };

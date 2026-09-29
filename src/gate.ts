@@ -4,11 +4,11 @@
 
 import * as crypto from "node:crypto";
 import type {
-  JevResponse,
-  JevAnswer,
-  JevNoulAnswer,
-  JevScoreAnswer,
-  JevChoiceAnswer,
+  TypeSafeResponse,
+  TypeSafeAnswer,
+  TypeSafeNoulAnswer,
+  TypeSafeScoreAnswer,
+  TypeSafeChoiceAnswer,
 } from "./client.ts";
 import type { GateConfig, GateBlockOnConfig, LoadedConfig } from "./config.ts";
 
@@ -77,7 +77,7 @@ export interface GateVerdict {
   reasons: string[];
   summary: string;
   scores: GateScores;
-  answers: Record<string, JevAnswer>;
+  answers: Record<string, TypeSafeAnswer>;
 }
 
 export type GateConfigInput =
@@ -98,25 +98,25 @@ export type GateConfigInput =
  * - choice: .choice and .confidence
  */
 export function evaluateGate(
-  responseOrAnswers: JevResponse | Record<string, JevAnswer>,
+  responseOrAnswers: TypeSafeResponse | Record<string, TypeSafeAnswer>,
   configInput?: GateConfigInput
 ): GateVerdict {
-  let answers: Record<string, JevAnswer>;
+  let answers: Record<string, TypeSafeAnswer>;
   if (
     responseOrAnswers &&
     typeof responseOrAnswers === "object" &&
     "answers" in responseOrAnswers &&
-    (responseOrAnswers as JevResponse).answers
+    (responseOrAnswers as TypeSafeResponse).answers
   ) {
-    answers = (responseOrAnswers as JevResponse).answers;
+    answers = (responseOrAnswers as TypeSafeResponse).answers;
   } else if (
     responseOrAnswers &&
     typeof responseOrAnswers === "object" &&
     !("answers" in responseOrAnswers)
   ) {
-    answers = responseOrAnswers as Record<string, JevAnswer>;
+    answers = responseOrAnswers as Record<string, TypeSafeAnswer>;
   } else {
-    throw new Error("Invalid response input: expected JevResponse or answers object");
+    throw new Error("Invalid response input: expected TypeSafeResponse or answers object");
   }
 
   // Extract configured thresholds
@@ -166,7 +166,7 @@ export function evaluateGate(
   const reasons: string[] = [];
 
   // 1. Destructive (noul)
-  const destructiveAns = answers.destructive as JevNoulAnswer;
+  const destructiveAns = answers.destructive as TypeSafeNoulAnswer;
   if (destructiveAns.type !== "noul" || typeof destructiveAns.noul !== "number") {
     throw new Error("Malformed destructive answer: expected noul number");
   }
@@ -176,7 +176,7 @@ export function evaluateGate(
   }
 
   // 2. Exfiltration (noul)
-  const exfilAns = answers.exfiltration as JevNoulAnswer;
+  const exfilAns = answers.exfiltration as TypeSafeNoulAnswer;
   if (exfilAns.type !== "noul" || typeof exfilAns.noul !== "number") {
     throw new Error("Malformed exfiltration answer: expected noul number");
   }
@@ -186,7 +186,7 @@ export function evaluateGate(
   }
 
   // 3. Beyond scope (noul)
-  const beyondAns = answers.beyond_scope as JevNoulAnswer;
+  const beyondAns = answers.beyond_scope as TypeSafeNoulAnswer;
   if (beyondAns.type !== "noul" || typeof beyondAns.noul !== "number") {
     throw new Error("Malformed beyond_scope answer: expected noul number");
   }
@@ -197,7 +197,7 @@ export function evaluateGate(
   }
 
   // 4. Impact (score & confidence)
-  const impactAns = answers.impact as JevScoreAnswer;
+  const impactAns = answers.impact as TypeSafeScoreAnswer;
   if (
     impactAns.type !== "score" ||
     typeof impactAns.score !== "number" ||
@@ -214,7 +214,7 @@ export function evaluateGate(
   // Optional: If any choice questions exist
   for (const [key, ans] of Object.entries(answers)) {
     if (ans.type === "choice") {
-      const choiceAns = ans as JevChoiceAnswer;
+      const choiceAns = ans as TypeSafeChoiceAnswer;
       // choice is accessible via choiceAns.choice and choiceAns.confidence
     }
   }

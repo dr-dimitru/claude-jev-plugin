@@ -28,6 +28,8 @@ Do not call Jev for arithmetic, regex matching, exact lookups, deterministic fil
 
 Manual check sends bounded text and current directory to TypeSafe. Do not pass material user did not consent to send externally.
 
+For a user-requested choice or a consequential decision with meaningful uncertainty, use the [decision helper](../decide/SKILL.md). It gathers missing context and sends custom typed questions through `claude-jev ask`.
+
 ## Question types
 
 ### Noul

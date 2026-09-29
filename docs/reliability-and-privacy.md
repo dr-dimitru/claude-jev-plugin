@@ -155,6 +155,8 @@ Global `~/.claude/claude-jev.json` may set model, HTTPS endpoint, total timeout,
 
 Project `.claude/claude-jev.json` may set gate/output enablement, mode, tools, bounds, cache duration, thresholds, and `blockWithoutUI`. It cannot set model, endpoint, timeout, retries, API key, or key file. This prevents repository-controlled credential and data redirection.
 
+The global `model` setting defaults to `jev-latest`. The client forwards a non-empty configured ID unchanged. An unavailable or incompatible selection returns no validated judgment; the client does not retry with Jev. Check alternate IDs in TypeSafe's [model docs](https://docs.typesafe.ai/models) or `GET /v1/models`, then confirm the [System One response contract](https://docs.typesafe.ai/api).
+
 Endpoints must use HTTPS and cannot contain embedded credentials.
 
 ## External data
@@ -170,6 +172,12 @@ TypeSafe may receive bounded:
 Plugin does not send full transcript, session ID, agent ID, transcript path, permission mode, API key as state, or raw cache records.
 
 Secret detection has an unavoidable privacy tradeoff: bounded output may already contain the secret TypeSafe is asked to identify.
+
+## Custom decision requests
+
+`claude-jev ask` sends only its `state` and `questions` fields to the configured TypeSafe endpoint. It does not send conversation history. The command enforces local limits of 64 KiB for complete JSON input, the configured `maxStateChars` value (8,000 by default), and 32 questions. Global or project configuration can set `maxStateChars`. TypeSafe API usage may incur cost.
+
+The `/claude-jev:decide` skill asks before sending sensitive details. TypeSafe results remain advisory. An unavailable model or invalid response does not count as a clear result, and the command does not switch models automatically. The skill reports that no TypeSafe judgment is available and continues with Claude's ordinary reasoning.
 
 ## Local state
 

@@ -2,7 +2,7 @@
 
 Status: Implemented and reviewed against current Claude Code and TypeSafe documentation.
 
-`claude-jev` ports the decision parts of `@y0usaf/pi-jev` to Claude Code. Claude Code invokes local command hooks. Those hooks send one bounded JSON request directly to TypeSafe Jev over HTTPS. The plugin does not define an MCP server, an MCP tool, or a persistent MCP process.
+`claude-jev` ports the decision parts of `@y0usaf/pi-jev` to Claude Code. Claude Code invokes local command hooks. Those hooks call the model-neutral `askTypeSafe` client to send one bounded JSON request to TypeSafe System One over HTTPS. Jev remains the default model. The plugin does not define an MCP server, an MCP tool, or a persistent MCP process.
 
 ## Lifecycle mapping
 
@@ -152,7 +152,7 @@ The normalized output uses `error` as output text and sets `is_error: true`. It 
 
 `tool_use_id` is recorded in bounded session state. If a future Claude Code version emits overlapping success and failure events, the second event is not judged again.
 
-## Jev questions and verdict composition
+## TypeSafe questions and verdict composition
 
 The client posts to the current documented endpoint:
 
@@ -162,7 +162,7 @@ Authorization: Bearer $TYPESAFE_API_KEY
 Content-Type: application/json
 ```
 
-The default model is `jev-latest`. The client validates the response before any verdict code reads it. All questions for one state go in one request. TypeSafe evaluates them independently, so the hook does not make four gate requests or two output requests.
+The default model is `jev-latest`. TypeSafe's current [model docs](https://docs.typesafe.ai/models) list Jev and its aliases. `GET /v1/models` returns the names available to an account. The `askTypeSafe` client sends a non-empty configured ID unchanged and does not switch models after an error. Confirm other IDs against the [System One response contract](https://docs.typesafe.ai/api) before selecting them. The client validates the response before any verdict code reads it. All questions for one state go in one request. TypeSafe evaluates them independently, so the hook does not make four gate requests or two output requests.
 
 ### Pre-tool gate
 

@@ -1,6 +1,6 @@
 import { sessionStore } from "../hook-io.ts";
 import { loadConfig, type LoadedConfig } from "../config.ts";
-import { askJev, DEFAULT_MODEL } from "../client.ts";
+import { askTypeSafe, DEFAULT_TYPESAFE_MODEL } from "../client.ts";
 import { getOrCreateCached } from "../cache.ts";
 import { buildOutputState } from "../state.ts";
 import {
@@ -20,7 +20,7 @@ export type OutputHookEvent = "PostToolUse" | "PostToolUseFailure";
 
 export interface OutputHookOptions {
   fetch?: typeof fetch;
-  askJevFn?: typeof askJev;
+  askJevFn?: typeof askTypeSafe;
   config?: LoadedConfig;
 }
 
@@ -103,7 +103,7 @@ export async function runOutputHook(
       },
     });
     const cacheKey = outputJudgmentKey(boundedState, {
-      model: config.model ?? DEFAULT_MODEL,
+      model: config.model ?? DEFAULT_TYPESAFE_MODEL,
       questions: OUTPUT_QUESTIONS,
       thresholds: {
         leakThreshold: config.output.leakThreshold ?? 0.9,
@@ -112,15 +112,15 @@ export async function runOutputHook(
     });
     const askFn = options?.askJevFn ?? (
       options?.fetch
-        ? (call: Parameters<typeof askJev>[0]) => askJev({ ...call, fetch: options.fetch })
-        : askJev
+        ? (call: Parameters<typeof askTypeSafe>[0]) => askTypeSafe({ ...call, fetch: options.fetch })
+        : askTypeSafe
     );
     const verdict = await getOrCreateCached<OutputVerdict>(
       cacheKey,
       120_000,
       async () => {
         const response = await askFn({
-          model: config.model ?? DEFAULT_MODEL,
+          model: config.model ?? DEFAULT_TYPESAFE_MODEL,
           state: boundedState,
           questions: OUTPUT_QUESTIONS,
           apiKey: config.apiKey,

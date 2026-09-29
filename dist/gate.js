@@ -68,7 +68,7 @@ export function evaluateGate(responseOrAnswers, configInput) {
         answers = responseOrAnswers;
     }
     else {
-        throw new Error("Invalid response input: expected JevResponse or answers object");
+        throw new Error("Invalid response input: expected TypeSafeResponse or answers object");
     }
     // Extract configured thresholds
     const blockOn = configInput?.gate?.blockOn ??

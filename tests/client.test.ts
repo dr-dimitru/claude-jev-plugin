@@ -2,20 +2,35 @@ import test, { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   askJev,
+  askTypeSafe,
   isRetryableStatus,
   registerApiKey,
   clearRegisteredApiKeys,
   redact,
   JevError,
+  TypeSafeError,
   DEFAULT_ENDPOINT,
   DEFAULT_MODEL,
+  DEFAULT_TYPESAFE_MODEL,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_RETRIES,
   parseRetryAfter,
   validateJevResponse,
+  validateTypeSafeResponse,
   type JevCall,
   type JevQuestion,
   type JevResponse,
+  type TypeSafeAnswer,
+  type TypeSafeCall,
+  type TypeSafeChoiceAnswer,
+  type TypeSafeChoiceQuestion,
+  type TypeSafeNoulAnswer,
+  type TypeSafeNoulQuestion,
+  type TypeSafeQuestion,
+  type TypeSafeResponse,
+  type TypeSafeScoreAnswer,
+  type TypeSafeScoreQuestion,
+  type TypeSafeUsage,
 } from "../src/client.ts";
 
 describe("TypeSafe Jev Client", () => {
@@ -38,9 +53,55 @@ describe("TypeSafe Jev Client", () => {
   describe("Constants and defaults", () => {
     it("exports default constants", () => {
       assert.equal(DEFAULT_MODEL, "jev-latest");
+      assert.equal(DEFAULT_TYPESAFE_MODEL, DEFAULT_MODEL);
       assert.equal(DEFAULT_ENDPOINT, "https://api.typesafe.ai/v1/systemone");
       assert.equal(DEFAULT_TIMEOUT_MS, 15000);
       assert.equal(DEFAULT_RETRIES, 2);
+    });
+
+    it("exports model-neutral names and preserves Jev aliases", () => {
+      const noulQuestion: TypeSafeNoulQuestion = {
+        type: "noul",
+        instructions: "Does this fit?",
+      };
+      const scoreQuestion: TypeSafeScoreQuestion = {
+        type: "score",
+        instructions: "How well does this fit?",
+        criteria: ["poor", "strong"],
+      };
+      const choiceQuestion: TypeSafeChoiceQuestion = {
+        type: "choice",
+        instructions: "Which option fits?",
+        criteria: { first: "First", second: "Second" },
+      };
+      const question: TypeSafeQuestion = noulQuestion;
+      const call: TypeSafeCall = { state: {}, questions: { q: question } };
+      const answers: Record<string, TypeSafeAnswer> = {
+        noul: { type: "noul", noul: 0.5 } satisfies TypeSafeNoulAnswer,
+        choice: {
+          type: "choice",
+          choice: "first",
+          probabilities: { first: 1 },
+          confidence: 1,
+        } satisfies TypeSafeChoiceAnswer,
+        score: {
+          type: "score",
+          score: 0,
+          legend: { "0": "poor", "1": "strong" },
+          probabilities: { "0": 1, "1": 0 },
+          confidence: 1,
+        } satisfies TypeSafeScoreAnswer,
+      };
+      const usage: TypeSafeUsage = { input_tokens: 1, output_tokens: 0 };
+      const response: TypeSafeResponse = { model: "jev-latest", answers, usage };
+
+      assert.equal(askJev, askTypeSafe);
+      assert.equal(JevError, TypeSafeError);
+      assert.equal(validateJevResponse, validateTypeSafeResponse);
+      assert.equal(call.questions.q.type, "noul");
+      assert.equal(scoreQuestion.criteria.length, 2);
+      assert.equal(choiceQuestion.criteria.first, "First");
+      assert.equal(response.model, "jev-latest");
     });
   });
 
@@ -130,6 +191,57 @@ describe("TypeSafe Jev Client", () => {
 
       assert.equal(capturedUrl, "https://custom.endpoint.ai/v1/systemone");
       assert.equal(capturedModel, "jev-custom-preview");
+    });
+
+    it("sends a configured model ID unchanged through askTypeSafe", async () => {
+      let capturedModel = "";
+      const model = "provider/custom-model-v2";
+
+      const mockFetch: typeof fetch = async (_input, init) => {
+        capturedModel = JSON.parse(String(init?.body)).model;
+        return new Response(
+          JSON.stringify({
+            model,
+            answers: { q1: { type: "noul", noul: 0.5 } },
+            usage: { input_tokens: 1, output_tokens: 0 },
+          }),
+          { status: 200 }
+        );
+      };
+
+      await askTypeSafe({
+        apiKey: "test-key",
+        model,
+        state: {},
+        questions: { q1: { type: "noul", instructions: "test" } },
+        fetch: mockFetch,
+      });
+
+      assert.equal(capturedModel, model);
+    });
+
+    it("does not fall back to Jev when the selected model is unavailable", async () => {
+      const selectedModel = "provider/unavailable-model";
+      const attemptedModels: string[] = [];
+
+      await assert.rejects(
+        askTypeSafe({
+          apiKey: "test-key",
+          model: selectedModel,
+          state: {},
+          questions: { q1: { type: "noul", instructions: "test" } },
+          fetch: async (_input, init) => {
+            attemptedModels.push(JSON.parse(String(init?.body)).model);
+            return new Response("model unavailable", { status: 404 });
+          },
+        }),
+        (error: unknown) =>
+          error instanceof TypeSafeError &&
+          error.status === 404 &&
+          error.code === "HTTP_404"
+      );
+
+      assert.deepEqual(attemptedModels, [selectedModel]);
     });
 
     it("rejects non-HTTPS endpoints before fetch", async () => {

@@ -162,6 +162,8 @@ Project configuration cannot set `model`, `endpoint`, `timeoutMs`, `retries`, `a
 
 Every endpoint must use HTTPS and cannot contain embedded credentials.
 
+The global `model` setting defaults to `jev-latest`. TypeSafe currently documents Jev and its aliases. Use `GET /v1/models` to check model names available to your account. The client sends a non-empty configured model ID unchanged and does not fall back when TypeSafe rejects it. Check any other ID against the [TypeSafe model docs](https://docs.typesafe.ai/models) and [API response contract](https://docs.typesafe.ai/api) before selecting it.
+
 Example project configuration:
 
 ```json
@@ -222,13 +224,20 @@ Plugin provides namespaced skill:
 
 ```text
 /claude-jev:jev
+/claude-jev:decide
 ```
+
+Use `/claude-jev:jev` for manual safety judgments. Use `/claude-jev:decide` when the user asks for help choosing or a consequential decision has meaningful uncertainty. The [decision skill](skills/decide/SKILL.md) asks for missing goals or constraints, then calls `claude-jev ask` with bounded custom questions.
 
 Automatic hooks do not depend on skill invocation. Main manual operation is:
 
 ```bash
 claude-jev check "text or command to judge"
 ```
+
+`claude-jev ask` reads one JSON object from stdin with `state` and `questions` fields. It uses trusted user configuration and returns the resolved model, usage, and validated answers. The command accepts up to 32 questions, limits JSON input to 64 KiB, and applies configured `maxStateChars` to state (8,000 by default). The request sends state and questions to TypeSafe and may incur API cost. Do not send conversation history. Ask before including sensitive details.
+
+The result is advisory evidence, not fact, consent, or permission to use a tool. If TypeSafe fails or returns an invalid answer, `claude-jev ask` exits with an error; it does not fabricate an answer or switch models.
 
 Inspection and advanced exact-session controls:
 

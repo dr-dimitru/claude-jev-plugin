@@ -1,10 +1,10 @@
 import { type LoadedConfig } from "../config.ts";
-import { askJev } from "../client.ts";
+import { askTypeSafe } from "../client.ts";
 import { type OutputVerdict } from "../output.ts";
 export type OutputHookEvent = "PostToolUse" | "PostToolUseFailure";
 export interface OutputHookOptions {
     fetch?: typeof fetch;
-    askJevFn?: typeof askJev;
+    askJevFn?: typeof askTypeSafe;
     config?: LoadedConfig;
 }
 export type OutputHookResult = {

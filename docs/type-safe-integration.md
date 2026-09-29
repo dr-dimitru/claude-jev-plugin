@@ -140,6 +140,44 @@ Content-Type: application/json
 
 Response must contain model, usage, and one typed answer per question. Plugin rejects missing answers, unknown options, incomplete distributions, invalid score legends, non-finite numbers, and probabilities that do not sum to one.
 
+## Model selection
+
+The trusted global `model` setting defaults to `jev-latest`. Project config cannot change the model or endpoint. The client sends a non-empty configured model ID unchanged and does not fall back when the selected model is unavailable or returns an invalid response.
+
+TypeSafe's current [model docs](https://docs.typesafe.ai/models) list Jev and its aliases. `GET /v1/models` returns the names available to your account. Before selecting another ID, confirm it there and check that its responses match TypeSafe's documented [System One response contract](https://docs.typesafe.ai/api). This guide lists only the verified Jev default.
+
+## Custom decision requests
+
+Use `claude-jev ask` for Claude-authored questions about one decision. It reads one JSON object from stdin with `state` and `questions` fields. It sends all questions that use the same state in one request.
+
+```bash
+claude-jev ask <<'JSON'
+{
+  "state": {
+    "decision": "Which option best fits the constraints?",
+    "options": ["Option A", "Option B"],
+    "constraints": ["Preserve existing user data."]
+  },
+  "questions": {
+    "best_option": {
+      "type": "choice",
+      "instructions": "Which option best fits the stated constraints?",
+      "criteria": {
+        "option_a": "Choose Option A.",
+        "option_b": "Choose Option B."
+      }
+    }
+  }
+}
+JSON
+```
+
+Each question can be Noul, Score, or Choice. The command returns JSON with the resolved `model`, `usage`, and validated `answers`. `claude-jev ask` enforces local limits of 64 KiB for the complete UTF-8 input and 32 questions. State is limited by `maxStateChars`, which defaults to 8,000 characters and can be set in global or project configuration. TypeSafe's API requires 2 to 10 Score levels and allows 1 to 255 Choice options.
+
+The current TypeSafe response contract requires a `usage` object. The CLI currently rejects responses without it.
+
+The command uses trusted model, endpoint, key, deadline, and retry settings. It does not accept per-request `--model` or `--endpoint` values. State and questions leave the machine and may incur API cost. Do not send conversation history. Ask before including sensitive details. The output is advisory evidence, not a fact, consent, or tool permission. An unavailable model or invalid response produces an error without automatic fallback or fabricated answers.
+
 ## Question primitives
 
 ### Noul

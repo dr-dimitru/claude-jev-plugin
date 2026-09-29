@@ -5,7 +5,7 @@
  * - Validates hook payload
  * - Loads config and session overrides
  * - Skips disabled, non-Bash, and missing-key paths
- * - Calls askJev once with all four gate questions
+ * - Calls askTypeSafe once with all four gate questions
  * - Stores last gate verdict in sessionStore
  * - Clear verdicts return no stdout
  * - Shadow flagged verdicts return concise systemMessage
@@ -18,7 +18,7 @@ import { loadConfig } from "../config.js";
 import { buildGateState } from "../state.js";
 import { GATE_QUESTIONS, evaluateGate, judgmentKey } from "../gate.js";
 import { getOrCreateCached } from "../cache.js";
-import { askJev } from "../client.js";
+import { askTypeSafe } from "../client.js";
 import { emitDiagnostic, normalizeToolName, readHookPayload, writeHookOutput } from "./common.js";
 export function isPromptHostAvailable(payload) {
     if (typeof payload.permission_mode !== "string")
@@ -84,9 +84,9 @@ export async function runPreTool(rawPayload, options) {
             minConfidence: config.gate.minConfidence,
         });
         const ttlMs = (config.gate.cacheSeconds ?? 120) * 1000;
-        // 6. Call askJev / retrieve cached verdict
+        // 6. Call askTypeSafe / retrieve cached verdict
         const verdict = await getOrCreateCached(cacheKey, ttlMs, async () => {
-            const response = await askJev({
+            const response = await askTypeSafe({
                 model: config.model,
                 endpoint: config.endpoint,
                 timeoutMs: config.timeoutMs,

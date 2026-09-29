@@ -1,7 +1,7 @@
 /**
  * Gate definitions, evaluation, and stable judgment key calculation for claude-jev.
  */
-import type { JevResponse, JevAnswer } from "./client.ts";
+import type { TypeSafeResponse, TypeSafeAnswer } from "./client.ts";
 import type { GateConfig, GateBlockOnConfig, LoadedConfig } from "./config.ts";
 export declare const GATE_QUESTIONS: {
     readonly destructive: {
@@ -63,7 +63,7 @@ export interface GateVerdict {
     reasons: string[];
     summary: string;
     scores: GateScores;
-    answers: Record<string, JevAnswer>;
+    answers: Record<string, TypeSafeAnswer>;
 }
 export type GateConfigInput = Partial<GateConfig> | Partial<GateBlockOnConfig> | LoadedConfig | {
     blockOn?: Partial<GateBlockOnConfig>;
@@ -77,7 +77,7 @@ export type GateConfigInput = Partial<GateConfig> | Partial<GateBlockOnConfig> |
  * - score: .score and .confidence
  * - choice: .choice and .confidence
  */
-export declare function evaluateGate(responseOrAnswers: JevResponse | Record<string, JevAnswer>, configInput?: GateConfigInput): GateVerdict;
+export declare function evaluateGate(responseOrAnswers: TypeSafeResponse | Record<string, TypeSafeAnswer>, configInput?: GateConfigInput): GateVerdict;
 /**
  * Produces a stable, normalized SHA-256 judgment key.
  * Normalizes object key ordering so identical state generates identical hash.
