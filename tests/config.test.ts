@@ -231,6 +231,23 @@ describe("config loading", () => {
     assert.equal(config.gate.mode, "enforce");
   });
 
+  it("reads retentionDays from global config only", () => {
+    const g = path.join(fakeHomeDir, ".claude");
+    const pr = path.join(projectDir, ".claude");
+    fs.mkdirSync(g, { recursive: true });
+    fs.mkdirSync(pr, { recursive: true });
+    assert.equal(loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).retentionDays, 7);
+    fs.writeFileSync(path.join(g, "claude-jev.json"), JSON.stringify({ retentionDays: 2.4 }));
+    fs.writeFileSync(path.join(pr, "claude-jev.json"), JSON.stringify({ retentionDays: 99 }));
+    assert.equal(loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).retentionDays, 2);
+    fs.writeFileSync(path.join(g, "claude-jev.json"), JSON.stringify({ retentionDays: 0 }));
+    assert.equal(loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).retentionDays, 0);
+    fs.writeFileSync(path.join(g, "claude-jev.json"), JSON.stringify({ retentionDays: -1 }));
+    assert.equal(loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).retentionDays, 7);
+    fs.writeFileSync(path.join(g, "claude-jev.json"), JSON.stringify({ retentionDays: "3" }));
+    assert.equal(loadConfig(projectDir, { homeDir: fakeHomeDir, env: {} }).retentionDays, 7);
+  });
+
   it("resolves a global relative apiKeyFile under the global config directory", () => {
     const globalClaudeDir = path.join(fakeHomeDir, ".claude");
     fs.mkdirSync(globalClaudeDir, { recursive: true });

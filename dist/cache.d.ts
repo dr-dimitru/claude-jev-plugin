@@ -31,6 +31,13 @@ export declare function clearMemoryCache(): void;
  */
 export declare function normalizeKey(input: unknown): string;
 /**
+ * Returns the directory whose "cache" subdirectory holds per-session caches.
+ */
+export declare function resolveCacheBase(options?: {
+    scratchpadDir?: string;
+    homeDir?: string;
+}): string;
+/**
  * Gets a cached value or coordinates concurrent execution of the producer.
  * Features:
  * - Session-local TTL cache

@@ -225,7 +225,7 @@ flowchart TD
 
 State contains bounded prompt, session overrides, latest verdict summaries, seen tool IDs, and diagnostic timestamps. Session filenames hash session and optional agent identities. Files use restrictive permissions and locked atomic updates.
 
-Scratchpad lifetime is managed by Claude Code. Plugin data persists through updates and is removed by uninstall unless `--keep-data` is used. Legacy fallback has no automatic retention sweep.
+Scratchpad lifetime is managed by Claude Code. Plugin data persists through updates and is removed by uninstall unless `--keep-data` is used. Retention. Session state files and per-session cache directories older than `retentionDays` (default 7, global configuration only, `0` disables) are deleted by `UserPromptSubmit`, at most once per day. A marker file `.last-prune` in the first existing state directory throttles the sweep. The sweep skips the current session, deletes at most 500 items per run, never follows symlinks, and touches only files named by the plugin's hash patterns. It fails open.
 
 ## Related guides
 

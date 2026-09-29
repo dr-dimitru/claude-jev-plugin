@@ -6,7 +6,9 @@
  */
 
 import { pathToFileURL } from "node:url";
-import { sessionStore } from "../hook-io.ts";
+import { hashSessionIdentity, resolveSessionBaseDir, sessionStore } from "../hook-io.ts";
+import { resolveCacheBase } from "../cache.ts";
+import { maybePruneSessionData } from "../retention.ts";
 import { readHookPayload } from "./common.ts";
 import { canCallTypeSafe, loadConfig } from "../config.ts";
 
@@ -48,8 +50,21 @@ export async function runUserPrompt(payload?: unknown): Promise<void> {
         scratchpadDir,
       });
       const overrides = await store.getOverrides();
-      if (!(overrides.enabled ?? config.gate.enabled) || !canCallTypeSafe(config)) return;
-      await store.setPrompt(prompt);
+      if ((overrides.enabled ?? config.gate.enabled) && canCallTypeSafe(config)) {
+        await store.setPrompt(prompt);
+      }
+      // Retention sweep runs regardless of gate state; throttled to once a day.
+      const roots = [
+        ...new Set([
+          resolveSessionBaseDir({ scratchpadDir }),
+          resolveCacheBase({ scratchpadDir }),
+        ]),
+      ];
+      await maybePruneSessionData({
+        roots,
+        retentionDays: config.retentionDays,
+        keepNames: [hashSessionIdentity(sessionId, agentId)],
+      });
     }
   } catch {
     // Fail-open: write nothing to stdout

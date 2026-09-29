@@ -32,6 +32,7 @@ export interface LoadedConfig {
     endpoint: string;
     timeoutMs: number;
     retries: number;
+    retentionDays: number;
     maxStateChars: number;
     apiKey?: string;
     apiKeyFile?: string;

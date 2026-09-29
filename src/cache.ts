@@ -88,6 +88,20 @@ function toSafeKey(key: unknown): string {
   return normalizeKey(key);
 }
 
+/**
+ * Returns the directory whose "cache" subdirectory holds per-session caches.
+ */
+export function resolveCacheBase(options?: {
+  scratchpadDir?: string;
+  homeDir?: string;
+}): string {
+  if (options?.scratchpadDir && options.scratchpadDir.trim().length > 0) {
+    return path.resolve(options.scratchpadDir.trim());
+  }
+  const userHome = options?.homeDir ?? process.env.HOME ?? os.homedir();
+  return path.join(userHome, ".cache", "claude-jev");
+}
+
 function resolveCacheDir(options?: CacheOptions): string {
   const sessionIdentity = options?.agentId
     ? `${options.sessionId ?? "default"}:${options.agentId}`
@@ -101,12 +115,7 @@ function resolveCacheDir(options?: CacheOptions): string {
     return path.resolve(options.cacheDir.trim());
   }
 
-  if (options?.scratchpadDir && options.scratchpadDir.trim().length > 0) {
-    return path.join(path.resolve(options.scratchpadDir.trim()), "cache", sessionPart);
-  }
-
-  const userHome = options?.homeDir ?? process.env.HOME ?? os.homedir();
-  return path.join(userHome, ".cache", "claude-jev", "cache", sessionPart);
+  return path.join(resolveCacheBase(options), "cache", sessionPart);
 }
 
 function ensureDirSync(dir: string): void {

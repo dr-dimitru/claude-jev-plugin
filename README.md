@@ -161,6 +161,8 @@ defaults -> global config -> project judgment config -> environment key -> sessi
 
 Project configuration cannot set `model`, `endpoint`, `timeoutMs`, `retries`, `apiKey`, or `apiKeyFile`. This prevents repository-controlled credential redirection. These transport fields are accepted only from trusted global configuration; plaintext JSON `apiKey` is not accepted. Relative global `apiKeyFile` resolves under `~/.claude`.
 
+`retentionDays` (default `7`, global configuration only) sets how long per-session state and judgment caches are kept. Once a day, `UserPromptSubmit` deletes data for other sessions that is older than this. `0` disables cleanup.
+
 Every remote endpoint must use HTTPS. Plain `http:` is allowed only for a local endpoint (`localhost`, `127.x.x.x`, or `[::1]`). No endpoint may contain embedded credentials. See [Model selection](#model-selection).
 
 Example project configuration:

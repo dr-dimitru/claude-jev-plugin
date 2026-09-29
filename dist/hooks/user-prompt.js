@@ -5,7 +5,9 @@
  * Returns no stdout to Claude Code. Never fails with non-zero exit code.
  */
 import { pathToFileURL } from "node:url";
-import { sessionStore } from "../hook-io.js";
+import { hashSessionIdentity, resolveSessionBaseDir, sessionStore } from "../hook-io.js";
+import { resolveCacheBase } from "../cache.js";
+import { maybePruneSessionData } from "../retention.js";
 import { readHookPayload } from "./common.js";
 import { canCallTypeSafe, loadConfig } from "../config.js";
 /**
@@ -33,9 +35,21 @@ export async function runUserPrompt(payload) {
                 scratchpadDir,
             });
             const overrides = await store.getOverrides();
-            if (!(overrides.enabled ?? config.gate.enabled) || !canCallTypeSafe(config))
-                return;
-            await store.setPrompt(prompt);
+            if ((overrides.enabled ?? config.gate.enabled) && canCallTypeSafe(config)) {
+                await store.setPrompt(prompt);
+            }
+            // Retention sweep runs regardless of gate state; throttled to once a day.
+            const roots = [
+                ...new Set([
+                    resolveSessionBaseDir({ scratchpadDir }),
+                    resolveCacheBase({ scratchpadDir }),
+                ]),
+            ];
+            await maybePruneSessionData({
+                roots,
+                retentionDays: config.retentionDays,
+                keepNames: [hashSessionIdentity(sessionId, agentId)],
+            });
         }
     }
     catch {

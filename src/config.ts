@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { DEFAULT_RETENTION_DAYS } from "./retention.ts";
 import {
   DEFAULT_TYPESAFE_MODEL as DEFAULT_MODEL,
   DEFAULT_ENDPOINT,
@@ -48,6 +49,7 @@ export interface LoadedConfig {
   endpoint: string;
   timeoutMs: number;
   retries: number;
+  retentionDays: number;
   maxStateChars: number;
   apiKey?: string;
   apiKeyFile?: string;
@@ -73,6 +75,7 @@ export const DEFAULT_CONFIG: LoadedConfig = {
   endpoint: DEFAULT_ENDPOINT,
   timeoutMs: DEFAULT_TIMEOUT_MS,
   retries: DEFAULT_RETRIES,
+  retentionDays: DEFAULT_RETENTION_DAYS,
   gate: {
     enabled: true,
     mode: "shadow",
@@ -104,6 +107,7 @@ function cloneConfig(c: LoadedConfig): LoadedConfig {
     endpoint: c.endpoint,
     timeoutMs: c.timeoutMs,
     retries: c.retries,
+    retentionDays: c.retentionDays,
     apiKey: c.apiKey,
     apiKeyFile: c.apiKeyFile,
     gate: {
@@ -183,6 +187,15 @@ function mergeConfigLayer(
     obj.retries >= 0
   ) {
     target.retries = Math.round(obj.retries);
+  }
+
+  if (
+    options.allowTransport &&
+    typeof obj.retentionDays === "number" &&
+    Number.isFinite(obj.retentionDays) &&
+    obj.retentionDays >= 0
+  ) {
+    target.retentionDays = Math.round(obj.retentionDays);
   }
 
   if (typeof obj.maxStateChars === "number" && Number.isFinite(obj.maxStateChars) && obj.maxStateChars > 0) {
