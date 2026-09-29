@@ -107,10 +107,21 @@ describe("claude-jev CLI", { concurrency: false }, () => {
       );
     });
 
-    it("has no lockfile, pins typescript exactly, and has no runtime dependencies", () => {
-      assert.equal(fs.existsSync(path.join(REPO_ROOT, "package-lock.json")), false);
+    it("commits no lockfile, pins dev tools exactly, and has no runtime dependencies", () => {
+      // A committed lockfile makes Claude Code run npm ci in installed copies,
+      // which installs devDependencies. A local, gitignored one is fine.
+      const tracked = spawnSync("git", ["ls-files", "--", "package-lock.json", "npm-shrinkwrap.json", "bun.lock", "bun.lockb"], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      });
+      assert.equal(tracked.status, 0);
+      assert.equal(tracked.stdout.trim(), "");
+      const ignored = spawnSync("git", ["check-ignore", "-q", "package-lock.json"], { cwd: REPO_ROOT });
+      assert.equal(ignored.status, 0, "package-lock.json must be gitignored");
       const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
-      assert.match(pkg.devDependencies.typescript, /^\d+\.\d+\.\d+$/);
+      for (const [name, version] of Object.entries(pkg.devDependencies ?? {})) {
+        assert.match(String(version), /^\d+\.\d+\.\d+$/, name);
+      }
       assert.ok(!pkg.dependencies || Object.keys(pkg.dependencies).length === 0);
     });
   });
